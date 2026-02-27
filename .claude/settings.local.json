@@ -1,0 +1,29 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(uv --version)",
+      "Bash(pip --version)",
+      "Bash(node --version)",
+      "Bash(npm --version)",
+      "Bash(py --version)",
+      "Bash(python3 -m pip --version)",
+      "Bash(py -3 -m pip --version)",
+      "Bash(py -3 --version)",
+      "Bash(npm create vite@latest frontend -- --template react-ts --yes)",
+      "Bash(npm install)",
+      "Bash(npm install -D tailwindcss@3 autoprefixer postcss @types/node)",
+      "Bash(npm install zustand lucide-react)",
+      "Bash(npx tailwindcss init -p)",
+      "Bash(py -3 -m pip install -e \".[dev]\")",
+      "Bash(py -3 -m pip install fastapi uvicorn[standard] anthropic openai pydantic pydantic-settings duckduckgo-search aiosqlite python-dotenv httpx)",
+      "Bash(py -3 -c \"from backend.config import load_config; from backend.agent.loop import get_enabled_tools; print\\(''Config OK''\\); print\\(''Tools:'', [t.name for t in get_enabled_tools\\(\\)]\\)\")",
+      "Bash(py -3 -c \"from backend.main import app; print\\(''FastAPI app OK''\\)\")",
+      "Bash(npm run build)",
+      "Bash(curl -s http://localhost:11434/api/tags)",
+      "Bash(py -3 -c \"import sys,json; data=json.load\\(sys.stdin\\); [print\\(f''  ✓ {m[\"\"name\"\"]}''\\) for m in data.get\\(''models'',[]\\)]\")",
+      "Bash(py -3 -c \"import sys,json; data=json.load\\(sys.stdin\\); [print\\(f''  OK {m[\"\"name\"\"]}''\\) for m in data.get\\(''models'',[]\\)]\")",
+      "Bash(py -3 -c \"import openai; print\\(openai.__version__\\)\")",
+      "Bash(py -3 -c \":*)"
+    ]
+  }
+}
