@@ -1,0 +1,52 @@
+{
+  "version": "1.0",
+  "default_model": "gemma3:1b",
+  "models": [
+    {
+      "name": "gemma3:1b",
+      "display_name": "Gemma 3 1B (Ollama)",
+      "provider": "ollama",
+      "base_url": "http://localhost:11434/v1"
+    },
+    {
+      "name": "claude-sonnet-4-6",
+      "display_name": "Claude Sonnet 4.6",
+      "provider": "anthropic",
+      "api_key_env": "ANTHROPIC_API_KEY"
+    },
+    {
+      "name": "claude-haiku-4-5-20251001",
+      "display_name": "Claude Haiku 4.5",
+      "provider": "anthropic",
+      "api_key_env": "ANTHROPIC_API_KEY"
+    },
+    {
+      "name": "llama3.2",
+      "display_name": "Llama 3.2 (Ollama)",
+      "provider": "ollama",
+      "base_url": "http://localhost:11434/v1"
+    }
+  ],
+  "tools": {
+    "filesystem": {
+      "enabled": true,
+      "allowed_paths": ["~"],
+      "require_confirmation_for": ["write_file", "delete_file"],
+      "max_file_size_mb": 10
+    },
+    "terminal": {
+      "enabled": true,
+      "require_confirmation": true,
+      "timeout_seconds": 30,
+      "blocked_patterns": ["rm -rf /", "format c:", "del /f /s /q C:\\"]
+    },
+    "web_search": {
+      "enabled": true,
+      "max_results": 5
+    }
+  },
+  "agent": {
+    "max_iterations": 20,
+    "system_prompt": "You are LocalForge, a helpful AI assistant with access to the local file system, terminal, and web search. Always be precise when working with files and commands. Ask for confirmation before destructive operations."
+  }
+}
