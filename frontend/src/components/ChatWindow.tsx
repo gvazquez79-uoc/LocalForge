@@ -11,6 +11,26 @@ interface FileAttachment {
   type: string;
 }
 
+const MAX_FILE_SIZE = 512 * 1024; // 512 KB
+
+/** Accept files that are text-based (code, config, data, etc.) */
+function isTextFile(file: File): boolean {
+  if (file.type.startsWith("text/")) return true;
+  if (!file.type) return true; // .py, .ts, .go etc. often have no MIME type
+  const textAppTypes = [
+    "application/json",
+    "application/javascript",
+    "application/typescript",
+    "application/xml",
+    "application/yaml",
+    "application/toml",
+    "application/x-sh",
+    "application/x-python",
+    "application/x-yaml",
+  ];
+  return textAppTypes.includes(file.type);
+}
+
 export function ChatWindow() {
   const { 
     messages, 
@@ -27,6 +47,7 @@ export function ChatWindow() {
   const [input, setInput] = useState("");
   const [attachments, setAttachments] = useState<FileAttachment[]>([]);
   const [isDragging, setIsDragging] = useState(false);
+  const [fileErrors, setFileErrors] = useState<string[]>([]);
   const bottomRef = useRef<HTMLDivElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const dragCounter = useRef(0);
@@ -62,18 +83,31 @@ export function ChatWindow() {
     const files = Array.from(e.dataTransfer.files);
     if (files.length === 0) return;
 
-    // Read file contents
     const newAttachments: FileAttachment[] = [];
+    const errors: string[] = [];
+
     for (const file of files) {
+      if (!isTextFile(file)) {
+        errors.push(`"${file.name}" — binary files not supported (images, PDFs, etc.)`);
+        continue;
+      }
+      if (file.size > MAX_FILE_SIZE) {
+        errors.push(`"${file.name}" — too large (max 512 KB)`);
+        continue;
+      }
       try {
         const attachment = await readFile(file);
         newAttachments.push(attachment);
-      } catch (err) {
-        console.error("Error reading file:", file.name, err);
+      } catch {
+        errors.push(`"${file.name}" — could not read file`);
       }
     }
 
-    setAttachments((prev) => [...prev, ...newAttachments]);
+    if (newAttachments.length > 0) setAttachments((prev) => [...prev, ...newAttachments]);
+    if (errors.length > 0) {
+      setFileErrors(errors);
+      setTimeout(() => setFileErrors([]), 4000); // auto-dismiss
+    }
   }, []);
 
   const handleDragEnter = (e: React.DragEvent) => {
@@ -154,20 +188,34 @@ export function ChatWindow() {
   const canSend = input.trim() || attachments.length > 0;
 
   return (
-    <div 
-      className="flex flex-col h-full"
+    <div
+      className="flex flex-col h-full relative"
       onDragEnter={handleDragEnter}
       onDragLeave={handleDragLeave}
       onDragOver={handleDragOver}
       onDrop={handleDrop}
     >
-      {/* Drag overlay */}
+      {/* Drag overlay — needs parent `relative` to work */}
       {isDragging && (
-        <div className="absolute inset-0 z-40 bg-indigo-500/20 border-4 border-dashed border-indigo-500 flex items-center justify-center">
+        <div className="absolute inset-0 z-40 bg-indigo-500/20 border-4 border-dashed border-indigo-500 rounded-none flex items-center justify-center pointer-events-none">
           <div className="bg-white dark:bg-zinc-800 px-6 py-4 rounded-xl shadow-xl flex items-center gap-3">
             <Upload className="w-8 h-8 text-indigo-500" />
-            <span className="text-lg font-medium">Drop files to upload</span>
+            <div>
+              <p className="font-semibold text-gray-900 dark:text-zinc-100">Drop files here</p>
+              <p className="text-xs text-gray-500 dark:text-zinc-400 mt-0.5">Text files only · max 512 KB</p>
+            </div>
           </div>
+        </div>
+      )}
+
+      {/* File error banner */}
+      {fileErrors.length > 0 && (
+        <div className="flex items-start gap-2 px-4 py-2 bg-amber-50 border-b border-amber-200 dark:bg-amber-950/40 dark:border-amber-800 text-amber-700 dark:text-amber-300 text-xs">
+          <AlertCircle size={13} className="flex-shrink-0 mt-0.5" />
+          <div className="flex-1">
+            {fileErrors.map((err, i) => <div key={i}>{err}</div>)}
+          </div>
+          <button onClick={() => setFileErrors([])}><X size={13} /></button>
         </div>
       )}
 
