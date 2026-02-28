@@ -38,12 +38,14 @@ interface ChatState {
   stopStream: (() => void) | null;
 }
 
+const STORAGE_KEY = "localforge_selected_model";
+
 export const useChatStore = create<ChatState>((set, get) => ({
   conversations: [],
   activeConvId: null,
   messages: [],
   models: [],
-  selectedModel: "",
+  selectedModel: localStorage.getItem(STORAGE_KEY) ?? "",
   isLoading: false,
   error: null,
   stopStream: null,
@@ -59,6 +61,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
       const currentSelected = get().selectedModel;
       set({ models, error: null });
       if (!currentSelected) {
+        localStorage.setItem(STORAGE_KEY, default_model);
         set({ selectedModel: default_model });
       }
     } catch {
@@ -99,7 +102,10 @@ export const useChatStore = create<ChatState>((set, get) => ({
     }));
   },
 
-  setModel: (model: string) => set({ selectedModel: model }),
+  setModel: (model: string) => {
+    localStorage.setItem(STORAGE_KEY, model);
+    set({ selectedModel: model });
+  },
 
   sendMessage: (content: string) => {
     const { activeConvId, selectedModel, stopStream } = get();

@@ -2,15 +2,24 @@
 Config API router.
 GET  /config         — return current config (without secret keys)
 GET  /config/models  — list available models (auto-discovers Ollama models)
+PUT  /config         — update tools + agent settings
 """
 from __future__ import annotations
+from typing import Any, Optional
 
 import httpx
 from fastapi import APIRouter
+from pydantic import BaseModel
 
-from backend.config import get_config
+from backend.config import get_config, save_config, ToolsConfig, AgentConfig
 
 router = APIRouter(prefix="/config", tags=["config"])
+
+
+class UpdateConfigRequest(BaseModel):
+    tools: Optional[dict[str, Any]] = None
+    agent: Optional[dict[str, Any]] = None
+    default_model: Optional[str] = None
 
 
 async def _discover_ollama_models(base_url: str) -> list[dict]:
@@ -105,3 +114,28 @@ async def list_models():
         "models": all_models,
         "default_model": default,
     }
+
+
+@router.put("")
+async def update_config(body: UpdateConfigRequest):
+    cfg = get_config()
+
+    if body.tools is not None:
+        current = cfg.tools.model_dump()
+        for section, values in body.tools.items():
+            if section in current and isinstance(values, dict):
+                current[section].update(values)
+            else:
+                current[section] = values
+        cfg.tools = ToolsConfig(**current)
+
+    if body.agent is not None:
+        current = cfg.agent.model_dump()
+        current.update(body.agent)
+        cfg.agent = AgentConfig(**current)
+
+    if body.default_model is not None:
+        cfg.default_model = body.default_model
+
+    save_config(cfg)
+    return {"ok": True}
