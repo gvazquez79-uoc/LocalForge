@@ -1,0 +1,33 @@
+{
+  "version": "1.0",
+  "default_model": "claude-sonnet-4-6",
+  "models": [],
+  "tools": {
+    "filesystem": {
+      "enabled": true,
+      "allowed_paths": [
+        "~",
+        "G:\\proyectos\\LocalForge"
+      ],
+      "require_confirmation_for": [
+        "write_file",
+        "delete_file"
+      ],
+      "max_file_size_mb": 10
+    },
+    "terminal": {
+      "enabled": true,
+      "require_confirmation": true,
+      "timeout_seconds": 30,
+      "blocked_patterns": []
+    },
+    "web_search": {
+      "enabled": true,
+      "max_results": 5
+    }
+  },
+  "agent": {
+    "max_iterations": 20,
+    "system_prompt": "You are LocalForge, a helpful AI assistant with access to the local file system, terminal, and web search. Always be precise when working with files and commands. Ask for confirmation before destructive operations."
+  }
+}
