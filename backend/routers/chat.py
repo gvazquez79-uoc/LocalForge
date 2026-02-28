@@ -30,6 +30,13 @@ from backend.models.registry import get_adapter
 
 router = APIRouter(prefix="/conversations", tags=["chat"])
 
+TITLE_PROMPT = (
+    "You are a title generator. Create a short title (3-5 words) for this conversation "
+    "based on the user's first message. "
+    "Just return the title, nothing else. "
+    "Examples: 'List Python files', 'Debug auth error', 'Explain regex', 'Search AI news'"
+)
+
 
 class CreateConversationRequest(BaseModel):
     model: str | None = None
@@ -86,6 +93,10 @@ async def send_message(conv_id: str, body: SendMessageRequest):
     cfg = get_config()
     model_name = body.model or conv["model"] or cfg.default_model
 
+    # Check if this is the first user message (to generate title)
+    stored_before = await get_messages(conv_id)
+    is_first_message = all(m["role"] != "user" for m in stored_before)
+
     # Persist user message
     await add_message(conv_id, "user", body.content)
 
@@ -99,6 +110,7 @@ async def send_message(conv_id: str, body: SendMessageRequest):
     async def event_stream() -> AsyncIterator[str]:
         full_text = ""
         tool_events = []
+        title_generated = False
 
         async for event in run_agent(messages, adapter):
             payload = json.dumps({"type": event.type, "data": event.data})
@@ -108,6 +120,22 @@ async def send_message(conv_id: str, body: SendMessageRequest):
                 full_text += event.data["text"]
             elif event.type == "tool_call":
                 tool_events.append(event.data)
+            elif event.type == "done" and is_first_message and not title_generated:
+                # Generate title after first response
+                title_generated = True
+                try:
+                    title_adapter = get_adapter(model_name)
+                    title_msg = [{"role": "user", "content": TITLE_PROMPT + f"\n\nUser message: {body.content}"}]
+                    title_text = ""
+                    async for title_event in title_adapter.stream_chat(title_msg, [], ""):
+                        if title_event.type == "text_delta":
+                            title_text += title_event.data["text"]
+                    if title_text.strip():
+                        clean_title = title_text.strip().strip('"').split('\n')[0][:50]
+                        await update_conversation_title(conv_id, clean_title)
+                        yield f"data: {json.dumps({'type': 'title_updated', 'data': {'title': clean_title}})}\n\n"
+                except Exception:
+                    pass  # Silently fail title generation
 
         # Persist assistant message
         if full_text:
