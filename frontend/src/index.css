@@ -51,34 +51,100 @@
   }
 }
 
-/* Copy button for code blocks */
+/* ── Code block chrome ─────────────────────────────────────────── */
 .prose-chat pre.code-block {
   position: relative;
-  padding-right: 40px;
+  padding: 2rem 1rem 0.75rem 1rem !important;
 }
 
+/* language badge (top-left) */
+.prose-chat .code-lang {
+  position: absolute;
+  top: 7px;
+  left: 10px;
+  font-family: ui-monospace, monospace;
+  font-size: 0.65rem;
+  line-height: 1;
+  opacity: 0.5;
+  user-select: none;
+  pointer-events: none;
+  text-transform: lowercase;
+}
+
+/* copy button (top-right) */
 .prose-chat .code-copy-btn {
   position: absolute;
-  top: 8px;
+  top: 6px;
   right: 8px;
   opacity: 0;
-  transition: opacity 0.2s;
-  padding: 6px;
-  border-radius: 6px;
-  background: rgba(63, 63, 63, 0.8);
-  color: #e4e4e7;
+  transition: opacity 0.15s;
+  padding: 5px;
+  border-radius: 5px;
+  background: rgba(63, 63, 63, 0.75);
+  color: #d4d4d8;
   cursor: pointer;
   border: none;
+  line-height: 0;
 }
+.prose-chat .code-copy-btn:hover { background: rgba(90, 90, 96, 0.9); }
+.prose-chat .code-copy-btn.copied { background: rgba(34, 197, 94, 0.75); }
+.prose-chat pre.code-block:hover .code-copy-btn { opacity: 1; }
 
-.prose-chat .code-copy-btn:hover {
-  background: rgba(83, 83, 89, 0.9);
-}
+/* ── highlight.js token colors ─────────────────────────────────── */
+/* Light mode — GitHub Light inspired */
+.prose-chat .hljs-keyword,
+.prose-chat .hljs-selector-tag { color: #cf222e; }
 
-.prose-chat .code-copy-btn.copied {
-  background: rgba(34, 197, 94, 0.8);
-}
+.prose-chat .hljs-string,
+.prose-chat .hljs-regexp,
+.prose-chat .hljs-template-string { color: #0a3069; }
 
-.prose-chat pre.code-block:hover .code-copy-btn {
-  opacity: 1;
-}
+.prose-chat .hljs-comment,
+.prose-chat .hljs-quote { color: #6e7781; font-style: italic; }
+
+.prose-chat .hljs-number,
+.prose-chat .hljs-literal { color: #0550ae; }
+
+.prose-chat .hljs-function,
+.prose-chat .hljs-title,
+.prose-chat .hljs-title.class_ { color: #8250df; }
+
+.prose-chat .hljs-built_in,
+.prose-chat .hljs-type { color: #953800; }
+
+.prose-chat .hljs-attr,
+.prose-chat .hljs-attribute,
+.prose-chat .hljs-variable,
+.prose-chat .hljs-name { color: #116329; }
+
+.prose-chat .hljs-tag { color: #116329; }
+.prose-chat .hljs-operator { color: #cf222e; }
+
+/* Dark mode — GitHub Dark inspired */
+.dark .prose-chat .hljs-keyword,
+.dark .prose-chat .hljs-selector-tag { color: #ff7b72; }
+
+.dark .prose-chat .hljs-string,
+.dark .prose-chat .hljs-regexp,
+.dark .prose-chat .hljs-template-string { color: #a5d6ff; }
+
+.dark .prose-chat .hljs-comment,
+.dark .prose-chat .hljs-quote { color: #8b949e; font-style: italic; }
+
+.dark .prose-chat .hljs-number,
+.dark .prose-chat .hljs-literal { color: #79c0ff; }
+
+.dark .prose-chat .hljs-function,
+.dark .prose-chat .hljs-title,
+.dark .prose-chat .hljs-title.class_ { color: #d2a8ff; }
+
+.dark .prose-chat .hljs-built_in,
+.dark .prose-chat .hljs-type { color: #ffa657; }
+
+.dark .prose-chat .hljs-attr,
+.dark .prose-chat .hljs-attribute,
+.dark .prose-chat .hljs-variable,
+.dark .prose-chat .hljs-name { color: #7ee787; }
+
+.dark .prose-chat .hljs-tag { color: #7ee787; }
+.dark .prose-chat .hljs-operator { color: #ff7b72; }
