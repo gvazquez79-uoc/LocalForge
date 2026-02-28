@@ -72,6 +72,52 @@ export async function renameConversation(id: string, title: string): Promise<voi
   });
 }
 
+// ── Config ───────────────────────────────────────────────────────────────────
+
+export interface LocalForgeConfig {
+  version: string;
+  default_model: string;
+  tools: {
+    filesystem: {
+      enabled: boolean;
+      allowed_paths: string[];
+      require_confirmation_for: string[];
+      max_file_size_mb: number;
+    };
+    terminal: {
+      enabled: boolean;
+      require_confirmation: boolean;
+      timeout_seconds: number;
+      blocked_patterns: string[];
+    };
+    web_search: {
+      enabled: boolean;
+      max_results: number;
+    };
+  };
+  agent: {
+    max_iterations: number;
+    system_prompt: string;
+  };
+}
+
+export async function getConfig(): Promise<LocalForgeConfig> {
+  const res = await fetch(`${BASE}/config`);
+  if (!res.ok) throw new Error(await res.text());
+  return res.json();
+}
+
+export async function saveConfig(
+  data: Partial<Pick<LocalForgeConfig, "tools" | "agent" | "default_model">>
+): Promise<void> {
+  const res = await fetch(`${BASE}/config`, {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(data),
+  });
+  if (!res.ok) throw new Error(await res.text());
+}
+
 // ── Models ───────────────────────────────────────────────────────────────────
 
 export interface ModelsResponse {
