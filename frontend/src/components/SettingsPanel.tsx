@@ -16,6 +16,7 @@ import { getConfig, saveConfig } from "../api/client";
 import type { LocalForgeConfig } from "../api/client";
 import { getStoredTheme, setTheme } from "../store/theme";
 import type { Theme } from "../store/theme";
+import { usePrefs } from "../store/prefs";
 
 interface SettingsPanelProps {
   open: boolean;
@@ -28,6 +29,7 @@ export function SettingsPanel({ open, onClose }: SettingsPanelProps) {
   const [savedOk, setSavedOk] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [theme, setThemeState] = useState<Theme>(getStoredTheme);
+  const { renderMarkdown, setRenderMarkdown } = usePrefs();
 
   useEffect(() => {
     if (open) {
@@ -128,6 +130,11 @@ export function SettingsPanel({ open, onClose }: SettingsPanelProps) {
                 )}
               </button>
             </div>
+            <Toggle
+              label="Render markdown in messages"
+              checked={renderMarkdown}
+              onChange={setRenderMarkdown}
+            />
           </Section>
 
           {!config ? (
