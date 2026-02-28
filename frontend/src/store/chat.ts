@@ -57,13 +57,12 @@ export const useChatStore = create<ChatState>((set, get) => ({
     try {
       const { models, default_model } = await listModels();
       const currentSelected = get().selectedModel;
-      set({ models });
-      // Set default only if nothing is selected yet
+      set({ models, error: null });
       if (!currentSelected) {
         set({ selectedModel: default_model });
       }
     } catch {
-      // ignore
+      set({ error: "backend_offline" });
     }
   },
 
