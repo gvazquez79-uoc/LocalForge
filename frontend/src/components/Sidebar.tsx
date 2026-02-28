@@ -1,5 +1,5 @@
-import { useEffect } from "react";
-import { Plus, Trash2, MessageSquare, Hammer, Settings } from "lucide-react";
+import { useEffect, useRef, useState } from "react";
+import { Plus, Trash2, MessageSquare, Hammer, Settings, Pencil } from "lucide-react";
 import { useChatStore } from "../store/chat";
 import { ModelSelector } from "./ModelSelector";
 
@@ -15,6 +15,7 @@ export function Sidebar({ onSettings }: SidebarProps) {
     selectConversation,
     newConversation,
     deleteConv,
+    renameConv,
   } = useChatStore();
 
   useEffect(() => {
@@ -62,6 +63,7 @@ export function Sidebar({ onSettings }: SidebarProps) {
                 e.stopPropagation();
                 deleteConv(conv.id);
               }}
+              onRename={(title) => renameConv(conv.id, title)}
             />
           ))
         )}
@@ -87,9 +89,55 @@ interface ConvItemProps {
   active: boolean;
   onSelect: () => void;
   onDelete: (e: React.MouseEvent) => void;
+  onRename: (title: string) => void;
 }
 
-function ConvItem({ title, active, onSelect, onDelete }: ConvItemProps) {
+function ConvItem({ title, active, onSelect, onDelete, onRename }: ConvItemProps) {
+  const [editing, setEditing] = useState(false);
+  const [draft, setDraft] = useState(title);
+  const inputRef = useRef<HTMLInputElement>(null);
+
+  const startEdit = (e: React.MouseEvent) => {
+    e.stopPropagation();
+    setDraft(title);
+    setEditing(true);
+    // Focus after render
+    setTimeout(() => {
+      inputRef.current?.select();
+    }, 0);
+  };
+
+  const commit = () => {
+    setEditing(false);
+    if (draft.trim() && draft.trim() !== title) {
+      onRename(draft.trim());
+    }
+  };
+
+  const handleKeyDown = (e: React.KeyboardEvent) => {
+    if (e.key === "Enter") commit();
+    if (e.key === "Escape") setEditing(false);
+  };
+
+  if (editing) {
+    return (
+      <div className={`flex items-center gap-1 px-2 py-1.5 rounded-lg ${
+        active ? "bg-gray-200 dark:bg-zinc-700" : "bg-gray-100 dark:bg-zinc-800"
+      }`}>
+        <MessageSquare size={14} className="flex-shrink-0 text-gray-400 dark:text-zinc-500" />
+        <input
+          ref={inputRef}
+          value={draft}
+          onChange={(e) => setDraft(e.target.value)}
+          onKeyDown={handleKeyDown}
+          onBlur={commit}
+          className="flex-1 text-sm bg-white dark:bg-zinc-900 text-gray-900 dark:text-zinc-100 border border-indigo-400 dark:border-indigo-500 rounded px-1.5 py-0.5 outline-none min-w-0"
+          autoFocus
+        />
+      </div>
+    );
+  }
+
   return (
     <div
       onClick={onSelect}
@@ -101,12 +149,23 @@ function ConvItem({ title, active, onSelect, onDelete }: ConvItemProps) {
     >
       <MessageSquare size={14} className="flex-shrink-0" />
       <span className="flex-1 text-sm truncate">{title}</span>
-      <button
-        onClick={onDelete}
-        className="opacity-0 group-hover:opacity-100 text-gray-300 hover:text-red-400 dark:text-zinc-600 transition-all"
-      >
-        <Trash2 size={13} />
-      </button>
+      {/* Action buttons — visible on hover */}
+      <div className="opacity-0 group-hover:opacity-100 flex items-center gap-1 transition-all">
+        <button
+          onClick={startEdit}
+          className="p-0.5 text-gray-300 hover:text-indigo-400 dark:text-zinc-600 dark:hover:text-indigo-400"
+          title="Rename"
+        >
+          <Pencil size={12} />
+        </button>
+        <button
+          onClick={onDelete}
+          className="p-0.5 text-gray-300 hover:text-red-400 dark:text-zinc-600 dark:hover:text-red-400"
+          title="Delete"
+        >
+          <Trash2 size={12} />
+        </button>
+      </div>
     </div>
   );
 }
