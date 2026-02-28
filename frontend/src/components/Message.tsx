@@ -43,14 +43,14 @@ export function Message({ message }: MessageProps) {
                 : "bg-gray-100 text-gray-900 rounded-tl-sm dark:bg-zinc-800 dark:text-zinc-100"
             }`}
           >
-            {/* Render sanitized HTML if present, otherwise plain text */}
-            <div className="whitespace-pre-wrap font-sans break-words" dangerouslySetInnerHTML={{ __html: DOMPurify.sanitize(message.content || "") }} />
-            {message.isStreaming && !message.content && (
+            {message.isStreaming && !message.content ? (
               <span className="inline-flex gap-1">
                 <span className="animate-bounce delay-0">.</span>
                 <span className="animate-bounce delay-100">.</span>
                 <span className="animate-bounce delay-200">.</span>
               </span>
+            ) : (
+              <div className="whitespace-pre-wrap font-sans break-words" dangerouslySetInnerHTML={{ __html: DOMPurify.sanitize(message.content || "") }} />
             )}
             {message.isStreaming && message.content && (
               <span className="inline-block w-0.5 h-4 bg-gray-400 dark:bg-zinc-400 animate-pulse ml-0.5 align-text-bottom" />
