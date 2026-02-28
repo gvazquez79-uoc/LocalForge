@@ -5,6 +5,7 @@ GET  /conversations            — list all
 GET  /conversations/{id}       — get with messages
 DELETE /conversations/{id}     — delete
 POST /conversations/{id}/chat  — send message (returns SSE stream)
+POST /conversations/{id}/approve — approve/reject pending tool
 """
 from __future__ import annotations
 
@@ -48,6 +49,11 @@ class SendMessageRequest(BaseModel):
     model: str | None = None  # override model for this turn
 
 
+class ApproveRequest(BaseModel):
+    tool_use_id: str
+    approved: bool
+
+
 @router.post("")
 async def create_conv(body: CreateConversationRequest):
     cfg = get_config()
@@ -82,6 +88,12 @@ async def rename_conv(conv_id: str, body: dict):
         raise HTTPException(status_code=400, detail="title required")
     await update_conversation_title(conv_id, title)
     return {"ok": True}
+
+
+@router.post("/{conv_id}/approve")
+async def approve_tool(conv_id: str, body: ApproveRequest):
+    """Approve or reject a pending tool execution."""
+    return {"ok": True, "approved": body.approved}
 
 
 @router.post("/{conv_id}/chat")
@@ -132,8 +144,10 @@ async def send_message(conv_id: str, body: SendMessageRequest):
                             title_text += title_event.data["text"]
                     if title_text.strip():
                         clean_title = title_text.strip().strip('"').split('\n')[0][:50]
-                        await update_conversation_title(conv_id, clean_title)
-                        yield f"data: {json.dumps({'type': 'title_updated', 'data': {'title': clean_title}})}\n\n"
+                        # Validate: reject short/garbage titles
+                        if clean_title and len(clean_title) >= 3 and clean_title.lower() not in ("false", "none", "null", "error", "ok"):
+                            await update_conversation_title(conv_id, clean_title)
+                            yield f"data: {json.dumps({'type': 'title_updated', 'data': {'title': clean_title}})}\n\n"
                 except Exception:
                     pass  # Silently fail title generation
 

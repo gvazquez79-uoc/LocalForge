@@ -26,8 +26,15 @@ export interface ModelInfo {
 }
 
 export interface StreamEvent {
-  type: "text_delta" | "tool_call" | "tool_result" | "iteration" | "done" | "error" | "title_updated";
+  type: "text_delta" | "tool_call" | "tool_result" | "iteration" | "done" | "error" | "title_updated" | "tool_confirmation_needed";
   data: Record<string, unknown>;
+}
+
+export interface ToolConfirmationNeeded {
+  tool_use_id: string;
+  name: string;
+  input: Record<string, unknown>;
+  message: string;
 }
 
 export interface ToolCallData {
@@ -69,6 +76,14 @@ export async function renameConversation(id: string, title: string): Promise<voi
     method: "PATCH",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ title }),
+  });
+}
+
+export async function approveTool(convId: string, toolUseId: string, approved: boolean): Promise<void> {
+  await fetch(`${BASE}/conversations/${convId}/approve`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ tool_use_id: toolUseId, approved }),
   });
 }
 
