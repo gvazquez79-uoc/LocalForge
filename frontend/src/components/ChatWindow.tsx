@@ -47,7 +47,7 @@ export function ChatWindow() {
     <div className="flex flex-col h-full">
       {/* Error banner */}
       {chatError && (
-        <div className="flex items-center gap-2 px-4 py-2 bg-red-950 border-b border-red-800 text-red-300 text-sm">
+        <div className="flex items-center gap-2 px-4 py-2 bg-red-50 border-b border-red-200 text-red-600 dark:bg-red-950 dark:border-red-800 dark:text-red-300 text-sm">
           <AlertCircle size={14} className="flex-shrink-0" />
           <span className="flex-1 truncate">{chatError}</span>
           <button onClick={() => useChatStore.setState({ error: null })}>
@@ -67,7 +67,7 @@ export function ChatWindow() {
       </div>
 
       {/* Input bar */}
-      <div className="border-t border-zinc-800 px-4 py-4 bg-zinc-950">
+      <div className="border-t border-gray-200 dark:border-zinc-800 px-4 py-4 bg-white dark:bg-zinc-950">
         <div className="flex gap-2 items-end max-w-4xl mx-auto">
           <textarea
             ref={textareaRef}
@@ -79,7 +79,7 @@ export function ChatWindow() {
             onKeyDown={handleKeyDown}
             placeholder="Message LocalForge… (Enter to send, Shift+Enter for newline)"
             rows={1}
-            className="flex-1 resize-none bg-zinc-800 border border-zinc-700 rounded-xl px-4 py-3 text-sm text-zinc-100 placeholder-zinc-500 focus:outline-none focus:border-indigo-500 transition-colors"
+            className="flex-1 resize-none bg-gray-100 border border-gray-300 dark:bg-zinc-800 dark:border-zinc-700 rounded-xl px-4 py-3 text-sm text-gray-900 dark:text-zinc-100 placeholder-gray-400 dark:placeholder-zinc-500 focus:outline-none focus:border-indigo-500 transition-colors"
             style={{ minHeight: "44px", maxHeight: "200px" }}
           />
           {isLoading ? (
@@ -109,11 +109,11 @@ export function ChatWindow() {
 function EmptyState() {
   return (
     <div className="flex flex-col items-center justify-center h-full gap-4 text-center py-20">
-      <div className="w-16 h-16 rounded-2xl bg-zinc-800 border border-zinc-700 flex items-center justify-center text-3xl">
+      <div className="w-16 h-16 rounded-2xl bg-gray-100 border border-gray-200 dark:bg-zinc-800 dark:border-zinc-700 flex items-center justify-center text-3xl">
         🔨
       </div>
-      <h2 className="text-xl font-semibold text-zinc-200">LocalForge</h2>
-      <p className="text-zinc-500 text-sm max-w-sm">
+      <h2 className="text-xl font-semibold text-gray-800 dark:text-zinc-200">LocalForge</h2>
+      <p className="text-gray-400 dark:text-zinc-500 text-sm max-w-sm">
         Your local AI agent with access to files, terminal, and web search.
         <br />
         Ask anything — or give it a task.
@@ -136,7 +136,7 @@ function SuggestionChip({ text }: { text: string }) {
   return (
     <button
       onClick={handleClick}
-      className="px-3 py-1.5 bg-zinc-800 hover:bg-zinc-700 border border-zinc-700 rounded-full text-xs text-zinc-300 transition-colors"
+      className="px-3 py-1.5 bg-gray-100 hover:bg-gray-200 border border-gray-200 dark:bg-zinc-800 dark:hover:bg-zinc-700 dark:border-zinc-700 rounded-full text-xs text-gray-600 dark:text-zinc-300 transition-colors"
     >
       {text}
     </button>

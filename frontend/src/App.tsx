@@ -7,7 +7,7 @@ export default function App() {
   const [settingsOpen, setSettingsOpen] = useState(false);
 
   return (
-    <div className="flex h-screen bg-zinc-950 overflow-hidden">
+    <div className="flex h-screen bg-white dark:bg-zinc-950 overflow-hidden">
       <Sidebar onSettings={() => setSettingsOpen(true)} />
       <main className="flex-1 flex flex-col min-w-0">
         <ChatWindow />
