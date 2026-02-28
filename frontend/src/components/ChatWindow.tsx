@@ -1,10 +1,10 @@
 import { useEffect, useRef, useState } from "react";
-import { Send, StopCircle } from "lucide-react";
+import { Send, StopCircle, AlertCircle, X } from "lucide-react";
 import { useChatStore } from "../store/chat";
 import { Message } from "./Message";
 
 export function ChatWindow() {
-  const { messages, isLoading, sendMessage, stopStream, activeConvId, newConversation } =
+  const { messages, isLoading, sendMessage, stopStream, activeConvId, newConversation, error } =
     useChatStore();
   const [input, setInput] = useState("");
   const bottomRef = useRef<HTMLDivElement>(null);
@@ -40,8 +40,22 @@ export function ChatWindow() {
     el.style.height = Math.min(el.scrollHeight, 200) + "px";
   };
 
+  // Only show chat errors (not backend_offline, that's handled by ModelSelector)
+  const chatError = error && error !== "backend_offline" ? error : null;
+
   return (
     <div className="flex flex-col h-full">
+      {/* Error banner */}
+      {chatError && (
+        <div className="flex items-center gap-2 px-4 py-2 bg-red-950 border-b border-red-800 text-red-300 text-sm">
+          <AlertCircle size={14} className="flex-shrink-0" />
+          <span className="flex-1 truncate">{chatError}</span>
+          <button onClick={() => useChatStore.setState({ error: null })}>
+            <X size={14} />
+          </button>
+        </div>
+      )}
+
       {/* Messages */}
       <div className="flex-1 overflow-y-auto px-4 py-6">
         {messages.length === 0 ? (

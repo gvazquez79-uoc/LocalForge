@@ -1,9 +1,13 @@
 import { useEffect } from "react";
-import { Plus, Trash2, MessageSquare, Hammer } from "lucide-react";
+import { Plus, Trash2, MessageSquare, Hammer, Settings } from "lucide-react";
 import { useChatStore } from "../store/chat";
 import { ModelSelector } from "./ModelSelector";
 
-export function Sidebar() {
+interface SidebarProps {
+  onSettings: () => void;
+}
+
+export function Sidebar({ onSettings }: SidebarProps) {
   const {
     conversations,
     activeConvId,
@@ -61,6 +65,17 @@ export function Sidebar() {
             />
           ))
         )}
+      </div>
+
+      {/* Settings button */}
+      <div className="border-t border-zinc-800 px-3 py-3">
+        <button
+          onClick={onSettings}
+          className="flex items-center gap-2 w-full px-3 py-2 rounded-lg text-zinc-500 hover:text-zinc-200 hover:bg-zinc-800 text-sm transition-colors"
+        >
+          <Settings size={15} />
+          Settings
+        </button>
       </div>
     </aside>
   );
