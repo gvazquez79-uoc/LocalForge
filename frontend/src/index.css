@@ -50,3 +50,35 @@
     @apply bg-gray-300 dark:bg-zinc-700 rounded-full;
   }
 }
+
+/* Copy button for code blocks */
+.prose-chat pre.code-block {
+  position: relative;
+  padding-right: 40px;
+}
+
+.prose-chat .code-copy-btn {
+  position: absolute;
+  top: 8px;
+  right: 8px;
+  opacity: 0;
+  transition: opacity 0.2s;
+  padding: 6px;
+  border-radius: 6px;
+  background: rgba(63, 63, 63, 0.8);
+  color: #e4e4e7;
+  cursor: pointer;
+  border: none;
+}
+
+.prose-chat .code-copy-btn:hover {
+  background: rgba(83, 83, 89, 0.9);
+}
+
+.prose-chat .code-copy-btn.copied {
+  background: rgba(34, 197, 94, 0.8);
+}
+
+.prose-chat pre.code-block:hover .code-copy-btn {
+  opacity: 1;
+}

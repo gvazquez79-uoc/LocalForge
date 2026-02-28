@@ -12,13 +12,55 @@ interface MessageProps {
   message: UIMessage;
 }
 
+// Custom renderer that adds copy buttons to code blocks
+const createRenderer = () => {
+  const renderer = new marked.Renderer();
+  
+  renderer.code = function({ text, lang }: { text: string; lang?: string }) {
+    const language = lang || 'text';
+    const escapedCode = text
+      .replace(/&/g, '&amp;')
+      .replace(/</g, '&lt;')
+      .replace(/>/g, '&gt;')
+      .replace(/"/g, '&quot;')
+      .replace(/'/g, '&#39;');
+    
+    return `<pre class="code-block"><code class="language-${language}">${escapedCode}</code><button class="code-copy-btn" data-code="${encodeURIComponent(text)}"><svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect width="14" height="14" x="8" y="8" rx="2" ry="2"/><path d="M4 16c-1.1 0-2-.9-2-2V4c0-1.1.9-2 2-2h10c1.1 0 2 .9 2 2"/></svg></button></pre>`;
+  };
+  
+  return renderer;
+};
+
+// Setup click handler once
+if (typeof window !== 'undefined' && !window.codeCopyHandlers) {
+  window.codeCopyHandlers = true;
+  document.addEventListener('click', (e) => {
+    const btn = (e.target as HTMLElement).closest('.code-copy-btn') as HTMLElement;
+    if (!btn) return;
+    
+    const code = decodeURIComponent(btn.dataset.code || '');
+    navigator.clipboard.writeText(code);
+    
+    btn.innerHTML = '<svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg>';
+    btn.classList.add('copied');
+    
+    setTimeout(() => {
+      btn.innerHTML = '<svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect width="14" height="14" x="8" y="8" rx="2" ry="2"/><path d="M4 16c-1.1 0-2-.9-2-2V4c0-1.1.9-2 2-2h10c1.1 0 2 .9 2 2"/></svg>';
+      btn.classList.remove('copied');
+    }, 2000);
+  });
+}
+
 export function Message({ message }: MessageProps) {
   const isUser = message.role === "user";
   const { renderMarkdown } = usePrefs();
 
   const html = useMemo(() => {
     if (!message.content || !renderMarkdown || message.isStreaming) return null;
-    return DOMPurify.sanitize(marked.parse(message.content) as string);
+    
+    const renderer = createRenderer();
+    const rawHtml = marked.parse(message.content, { renderer }) as string;
+    return DOMPurify.sanitize(rawHtml);
   }, [message.content, message.isStreaming, renderMarkdown]);
 
   return (
