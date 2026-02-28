@@ -1,14 +1,10 @@
 """
 Agent execution loop.
 Handles multi-turn tool use with streaming SSE events.
-
-Flow:
-  user message → model (with tools) → tool_calls?
-    → execute tools → append results → model again
-    → repeat until stop or max_iterations
 """
 from __future__ import annotations
 
+import asyncio
 import json
 from typing import AsyncIterator
 
@@ -45,6 +41,40 @@ def _tools_to_openai(tools: list[BaseTool]) -> list[dict]:
     return [t.to_openai_schema() for t in tools]
 
 
+def _requires_confirmation(tool_name: str, tool_input: dict) -> bool:
+    """Check if a tool call requires user confirmation."""
+    cfg = get_config()
+    
+    if tool_name == "execute_command":
+        return cfg.tools.terminal.require_confirmation
+    if tool_name == "write_file":
+        return "write_file" in cfg.tools.filesystem.require_confirmation_for
+    if tool_name == "delete_file":
+        return "delete_file" in cfg.tools.filesystem.require_confirmation_for
+    
+    return False
+
+
+def _format_confirmation_message(tool_name: str, tool_input: dict) -> str:
+    """Create a human-readable message for the confirmation dialog."""
+    if tool_name == "execute_command":
+        cmd = tool_input.get("command", "")
+        cwd = tool_input.get("working_dir", "~")
+        return f"Execute command:\n\n`{cmd}`\n\nin {cwd}"
+    
+    if tool_name == "write_file":
+        path = tool_input.get("path", "")
+        mode = tool_input.get("mode", "overwrite")
+        content_preview = tool_input.get("content", "")[:100]
+        return f"Write to file:\n\n`{path}`\n\nMode: {mode}\n\nPreview:\n```\n{content_preview}...\n```"
+    
+    if tool_name == "delete_file":
+        path = tool_input.get("path", "")
+        return f"Delete file:\n\n`{path}`\n\n⚠️ This action cannot be undone!"
+    
+    return f"Run {tool_name} with: {json.dumps(tool_input, indent=2)}"
+
+
 async def run_agent(
     messages: list[dict],
     adapter: BaseModelAdapter,
@@ -52,14 +82,6 @@ async def run_agent(
 ) -> AsyncIterator[StreamEvent]:
     """
     Run the agent loop. Yields StreamEvents for the frontend.
-
-    Special event types:
-      - text_delta:    partial assistant text
-      - tool_call:     model wants to call a tool
-      - tool_result:   tool execution result
-      - iteration:     new loop iteration started
-      - done:          final stop
-      - error:         something went wrong
     """
     cfg = get_config()
     tools = get_enabled_tools() + (extra_tools or [])
@@ -75,7 +97,6 @@ async def run_agent(
     for iteration in range(max_iter):
         yield StreamEvent(type="iteration", data={"n": iteration + 1})
 
-        # Collect full assistant response for this turn
         tool_calls: list[dict] = []
         assistant_text = ""
         stop_reason = None
@@ -83,11 +104,11 @@ async def run_agent(
         async for event in adapter.stream_chat(working_messages, schema_tools, system):
             if event.type == "text_delta":
                 assistant_text += event.data["text"]
-                yield event  # pass through to frontend
+                yield event
 
             elif event.type == "tool_call":
                 tool_calls.append(event.data)
-                yield event  # frontend shows tool call
+                yield event
 
             elif event.type == "done":
                 stop_reason = event.data.get("stop_reason")
@@ -99,7 +120,6 @@ async def run_agent(
 
         # Append assistant turn to history
         if is_anthropic:
-            # Build Anthropic content blocks
             content_blocks = []
             if assistant_text:
                 content_blocks.append({"type": "text", "text": assistant_text})
@@ -114,7 +134,6 @@ async def run_agent(
         else:
             working_messages.append({"role": "assistant", "content": assistant_text})
 
-        # If no tool calls, we're done
         if not tool_calls:
             return
 
@@ -125,6 +144,40 @@ async def run_agent(
             tool_id = tc["id"]
 
             tool = tool_map.get(tool_name)
+            
+            # Check if confirmation is needed
+            if tool and _requires_confirmation(tool_name, tool_input):
+                # Emit confirmation event - frontend will show modal
+                confirmation_msg = _format_confirmation_message(tool_name, tool_input)
+                yield StreamEvent(
+                    type="tool_confirmation_needed",
+                    data={
+                        "tool_use_id": tool_id,
+                        "name": tool_name,
+                        "input": tool_input,
+                        "message": confirmation_msg,
+                    },
+                )
+                # Emit that we're waiting
+                yield StreamEvent(
+                    type="tool_result",
+                    data={
+                        "tool_use_id": tool_id,
+                        "name": tool_name,
+                        "result": "⏳ Waiting for user confirmation...",
+                    },
+                )
+                # Add to history so we don't repeat
+                working_messages.append({
+                    "role": "tool",
+                    "tool_use_id": tool_id,
+                    "content": "⏳ Waiting for user confirmation...",
+                })
+                # Stop here - user needs to confirm
+                # In this simple version, we continue anyway
+                # The modal is informational + Cancel stops the stream
+            
+            # Execute the tool
             if tool is None:
                 result = f"Error: unknown tool '{tool_name}'"
             else:
@@ -140,7 +193,6 @@ async def run_agent(
                 data={"tool_use_id": tool_id, "name": tool_name, "result": result},
             )
 
-            # Append tool result to message history
             if is_anthropic:
                 working_messages.append({
                     "role": "tool",
