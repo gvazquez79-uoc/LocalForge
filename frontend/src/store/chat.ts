@@ -7,6 +7,7 @@ import {
   getConversation,
   listConversations,
   listModels,
+  renameConversation,
   streamChat,
   approveTool,
 } from "../api/client";
@@ -36,6 +37,7 @@ interface ChatState {
   selectConversation: (id: string) => Promise<void>;
   newConversation: () => Promise<void>;
   deleteConv: (id: string) => Promise<void>;
+  renameConv: (id: string, title: string) => Promise<void>;
   sendMessage: (content: string) => void;
   setModel: (model: string) => void;
   stopStream: (() => void) | null;
@@ -105,6 +107,17 @@ export const useChatStore = create<ChatState>((set, get) => ({
       conversations: s.conversations.filter((c) => c.id !== id),
       activeConvId: activeConvId === id ? null : activeConvId,
       messages: activeConvId === id ? [] : s.messages,
+    }));
+  },
+
+  renameConv: async (id: string, title: string) => {
+    const trimmed = title.trim();
+    if (!trimmed) return;
+    await renameConversation(id, trimmed);
+    set((s) => ({
+      conversations: s.conversations.map((c) =>
+        c.id === id ? { ...c, title: trimmed } : c
+      ),
     }));
   },
 
