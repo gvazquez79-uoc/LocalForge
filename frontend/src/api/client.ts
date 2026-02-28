@@ -26,7 +26,7 @@ export interface ModelInfo {
 }
 
 export interface StreamEvent {
-  type: "text_delta" | "tool_call" | "tool_result" | "iteration" | "done" | "error";
+  type: "text_delta" | "tool_call" | "tool_result" | "iteration" | "done" | "error" | "title_updated";
   data: Record<string, unknown>;
 }
 

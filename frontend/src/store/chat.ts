@@ -140,6 +140,17 @@ export const useChatStore = create<ChatState>((set, get) => ({
       content,
       selectedModel,
       (event: StreamEvent) => {
+        // Handle title_updated event
+        if (event.type === "title_updated") {
+          const newTitle = (event.data as { title: string }).title;
+          set((s) => ({
+            conversations: s.conversations.map((c) =>
+              c.id === activeConvId ? { ...c, title: newTitle } : c
+            ),
+          }));
+          return;
+        }
+
         set((s) => {
           const msgs = [...s.messages];
           const last = msgs[msgs.length - 1];
