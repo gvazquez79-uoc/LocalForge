@@ -31,7 +31,9 @@
       "Bash(git commit:*)",
       "Bash(git push origin luamodel/v1)",
       "Bash(gh pr:*)",
-      "Bash(git add .claude/settings.local.json)"
+      "Bash(git add .claude/settings.local.json)",
+      "Bash(curl -s http://localhost:8000/api/config/models)",
+      "Bash(git add frontend/src/components/ModelSelector.tsx frontend/src/store/chat.ts)"
     ]
   }
 }
