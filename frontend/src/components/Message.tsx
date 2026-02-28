@@ -16,7 +16,7 @@ export function Message({ message }: MessageProps) {
         className={`flex-shrink-0 w-8 h-8 rounded-full flex items-center justify-center text-xs ${
           isUser
             ? "bg-indigo-600 text-white"
-            : "bg-zinc-800 text-emerald-400 border border-zinc-700"
+            : "bg-gray-100 border border-gray-200 text-emerald-600 dark:bg-zinc-800 dark:border-zinc-700 dark:text-emerald-400"
         }`}
       >
         {isUser ? <User size={16} /> : <Bot size={16} />}
@@ -43,7 +43,7 @@ export function Message({ message }: MessageProps) {
             className={`px-4 py-3 rounded-2xl text-sm leading-relaxed ${
               isUser
                 ? "bg-indigo-600 text-white rounded-tr-sm"
-                : "bg-zinc-800 text-zinc-100 rounded-tl-sm"
+                : "bg-gray-100 text-gray-900 rounded-tl-sm dark:bg-zinc-800 dark:text-zinc-100"
             }`}
           >
             <pre className="whitespace-pre-wrap font-sans break-words">
@@ -56,7 +56,7 @@ export function Message({ message }: MessageProps) {
                 </span>
               )}
               {message.isStreaming && message.content && (
-                <span className="inline-block w-0.5 h-4 bg-zinc-400 animate-pulse ml-0.5 align-text-bottom" />
+                <span className="inline-block w-0.5 h-4 bg-gray-400 dark:bg-zinc-400 animate-pulse ml-0.5 align-text-bottom" />
               )}
             </pre>
           </div>

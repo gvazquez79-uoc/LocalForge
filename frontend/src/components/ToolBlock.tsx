@@ -22,35 +22,35 @@ export function ToolBlock({ tool, result }: ToolBlockProps) {
   const icon = TOOL_ICONS[tool.name] ?? <Terminal size={14} />;
 
   return (
-    <div className="my-2 rounded-lg border border-zinc-700 bg-zinc-900 text-sm overflow-hidden">
+    <div className="my-2 rounded-lg border border-gray-200 bg-gray-50 dark:border-zinc-700 dark:bg-zinc-900 text-sm overflow-hidden">
       <button
         onClick={() => setOpen((v) => !v)}
-        className="flex w-full items-center gap-2 px-3 py-2 text-left text-zinc-400 hover:bg-zinc-800 transition-colors"
+        className="flex w-full items-center gap-2 px-3 py-2 text-left text-gray-500 hover:bg-gray-100 dark:text-zinc-400 dark:hover:bg-zinc-800 transition-colors"
       >
-        <span className="text-emerald-400">{icon}</span>
-        <span className="font-mono text-emerald-400">{tool.name}</span>
-        <span className="text-zinc-500 text-xs truncate flex-1">
+        <span className="text-emerald-600 dark:text-emerald-400">{icon}</span>
+        <span className="font-mono text-emerald-600 dark:text-emerald-400">{tool.name}</span>
+        <span className="text-gray-400 dark:text-zinc-500 text-xs truncate flex-1">
           {formatInputSummary(tool.input)}
         </span>
         {result ? (
           open ? <ChevronDown size={14} /> : <ChevronRight size={14} />
         ) : (
-          <span className="text-xs text-yellow-400 animate-pulse">running…</span>
+          <span className="text-xs text-yellow-500 dark:text-yellow-400 animate-pulse">running…</span>
         )}
       </button>
 
       {open && (
-        <div className="border-t border-zinc-700">
-          <div className="px-3 py-2 bg-zinc-950">
-            <p className="text-zinc-500 text-xs mb-1">Input</p>
-            <pre className="text-zinc-300 text-xs overflow-x-auto whitespace-pre-wrap">
+        <div className="border-t border-gray-200 dark:border-zinc-700">
+          <div className="px-3 py-2 bg-gray-100 dark:bg-zinc-950">
+            <p className="text-gray-400 dark:text-zinc-500 text-xs mb-1">Input</p>
+            <pre className="text-gray-700 dark:text-zinc-300 text-xs overflow-x-auto whitespace-pre-wrap">
               {JSON.stringify(tool.input, null, 2)}
             </pre>
           </div>
           {result && (
-            <div className="px-3 py-2 border-t border-zinc-800">
-              <p className="text-zinc-500 text-xs mb-1">Output</p>
-              <pre className="text-zinc-300 text-xs overflow-x-auto whitespace-pre-wrap max-h-64">
+            <div className="px-3 py-2 border-t border-gray-200 dark:border-zinc-800">
+              <p className="text-gray-400 dark:text-zinc-500 text-xs mb-1">Output</p>
+              <pre className="text-gray-700 dark:text-zinc-300 text-xs overflow-x-auto whitespace-pre-wrap max-h-64">
                 {result}
               </pre>
             </div>
