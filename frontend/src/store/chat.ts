@@ -1,5 +1,6 @@
 import { create } from "zustand";
 import type { Conversation, ModelInfo, StreamEvent, ToolCallData } from "../api/client";
+import type { PendingConfirmation } from "../components/ConfirmationModal";
 import {
   createConversation,
   deleteConversation,
@@ -7,6 +8,7 @@ import {
   listConversations,
   listModels,
   streamChat,
+  approveTool,
 } from "../api/client";
 
 
@@ -27,6 +29,7 @@ interface ChatState {
   selectedModel: string;
   isLoading: boolean;
   error: string | null;
+  pendingConfirmation: PendingConfirmation | null;
 
   loadConversations: () => Promise<void>;
   loadModels: () => Promise<void>;
@@ -36,6 +39,8 @@ interface ChatState {
   sendMessage: (content: string) => void;
   setModel: (model: string) => void;
   stopStream: (() => void) | null;
+  approveConfirmation: () => void;
+  rejectConfirmation: () => void;
 }
 
 const STORAGE_KEY = "localforge_selected_model";
@@ -49,6 +54,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
   isLoading: false,
   error: null,
   stopStream: null,
+  pendingConfirmation: null,
 
   loadConversations: async () => {
     const conversations = await listConversations();
@@ -107,6 +113,24 @@ export const useChatStore = create<ChatState>((set, get) => ({
     set({ selectedModel: model });
   },
 
+  approveConfirmation: async () => {
+    const { pendingConfirmation, activeConvId } = get();
+    if (pendingConfirmation && activeConvId) {
+      // Send approval to backend and wait
+      await approveTool(activeConvId, pendingConfirmation.tool_use_id, true);
+    }
+    set({ pendingConfirmation: null });
+  },
+
+  rejectConfirmation: async () => {
+    const { pendingConfirmation, activeConvId } = get();
+    if (pendingConfirmation && activeConvId) {
+      // Send rejection to backend and wait
+      await approveTool(activeConvId, pendingConfirmation.tool_use_id, false);
+    }
+    set({ pendingConfirmation: null, isLoading: false });
+  },
+
   sendMessage: (content: string) => {
     const { activeConvId, selectedModel, stopStream } = get();
     if (!activeConvId) return;
@@ -149,6 +173,22 @@ export const useChatStore = create<ChatState>((set, get) => ({
             ),
           }));
           return;
+        }
+
+        // Handle confirmation needed
+        if (event.type === "tool_confirmation_needed") {
+          const confirmation = event.data as PendingConfirmation;
+          set({ pendingConfirmation: confirmation, isLoading: false });
+          return;
+        }
+
+        // Handle tool result - this means confirmation was resolved
+        if (event.type === "tool_result") {
+          // Clear any pending confirmation since we got the result
+          const { pendingConfirmation } = get();
+          if (pendingConfirmation) {
+            set({ pendingConfirmation: null });
+          }
         }
 
         set((s) => {
