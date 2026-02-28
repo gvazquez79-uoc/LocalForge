@@ -56,12 +56,20 @@ class AgentConfig(BaseModel):
     )
 
 
+class TelegramConfig(BaseModel):
+    enabled: bool = False
+    bot_token: str = ""
+    allowed_user_ids: list[int] = Field(default_factory=list)
+    default_model: str = ""
+
+
 class LocalForgeConfig(BaseModel):
     version: str = "1.0"
     default_model: str = "claude-sonnet-4-6"
     models: list[ModelConfig] = Field(default_factory=list)
     tools: ToolsConfig = Field(default_factory=ToolsConfig)
     agent: AgentConfig = Field(default_factory=AgentConfig)
+    telegram: TelegramConfig = Field(default_factory=TelegramConfig)
 
     def get_model(self, name: str) -> Optional[ModelConfig]:
         for m in self.models:

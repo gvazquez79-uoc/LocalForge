@@ -11,7 +11,7 @@ import httpx
 from fastapi import APIRouter
 from pydantic import BaseModel
 
-from backend.config import get_config, save_config, ToolsConfig, AgentConfig
+from backend.config import get_config, save_config, ToolsConfig, AgentConfig, TelegramConfig
 
 router = APIRouter(prefix="/config", tags=["config"])
 
@@ -19,6 +19,7 @@ router = APIRouter(prefix="/config", tags=["config"])
 class UpdateConfigRequest(BaseModel):
     tools: Optional[dict[str, Any]] = None
     agent: Optional[dict[str, Any]] = None
+    telegram: Optional[dict[str, Any]] = None
     default_model: Optional[str] = None
 
 
@@ -70,6 +71,12 @@ async def read_config():
         "models": safe_models,
         "tools": cfg.tools.model_dump(),
         "agent": cfg.agent.model_dump(),
+        "telegram": {
+            "enabled": cfg.telegram.enabled,
+            "bot_token": "***" if cfg.telegram.bot_token else "",
+            "allowed_user_ids": cfg.telegram.allowed_user_ids,
+            "default_model": cfg.telegram.default_model,
+        },
     }
 
 
@@ -133,6 +140,19 @@ async def update_config(body: UpdateConfigRequest):
         current = cfg.agent.model_dump()
         current.update(body.agent)
         cfg.agent = AgentConfig(**current)
+
+    if body.telegram is not None:
+        current = cfg.telegram.model_dump()
+        # Only update fields that are provided
+        if "enabled" in body.telegram:
+            current["enabled"] = body.telegram["enabled"]
+        if "bot_token" in body.telegram and body.telegram["bot_token"]:
+            current["bot_token"] = body.telegram["bot_token"]
+        if "allowed_user_ids" in body.telegram:
+            current["allowed_user_ids"] = body.telegram["allowed_user_ids"]
+        if "default_model" in body.telegram:
+            current["default_model"] = body.telegram["default_model"]
+        cfg.telegram = TelegramConfig(**current)
 
     if body.default_model is not None:
         cfg.default_model = body.default_model
