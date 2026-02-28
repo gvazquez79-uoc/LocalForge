@@ -1,6 +1,7 @@
 import type { UIMessage } from "../store/chat";
 import { ToolBlock } from "./ToolBlock";
 import { Bot, User } from "lucide-react";
+import DOMPurify from "dompurify";
 
 interface MessageProps {
   message: UIMessage;
@@ -10,7 +11,7 @@ export function Message({ message }: MessageProps) {
   const isUser = message.role === "user";
 
   return (
-    <div className={`flex gap-3 ${isUser ? "flex-row-reverse" : "flex-row"} mb-6`}>
+    <div className={`flex gap-3 ${isUser ? "flex-row-reverse" : "flex-row"} mb-6`}> 
       {/* Avatar */}
       <div
         className={`flex-shrink-0 w-8 h-8 rounded-full flex items-center justify-center text-xs ${
@@ -23,16 +24,12 @@ export function Message({ message }: MessageProps) {
       </div>
 
       {/* Content */}
-      <div className={`flex-1 max-w-[85%] ${isUser ? "items-end" : "items-start"} flex flex-col gap-1`}>
+      <div className={`flex-1 max-w-[85%] ${isUser ? "items-end" : "items-start"} flex flex-col gap-1`}> 
         {/* Tool calls */}
         {!isUser && message.toolCalls && message.toolCalls.length > 0 && (
           <div className="w-full">
             {message.toolCalls.map((tc) => (
-              <ToolBlock
-                key={tc.id}
-                tool={tc}
-                result={message.toolResults?.[tc.id]}
-              />
+              <ToolBlock key={tc.id} tool={tc} result={message.toolResults?.[tc.id]} />
             ))}
           </div>
         )}
@@ -46,19 +43,18 @@ export function Message({ message }: MessageProps) {
                 : "bg-gray-100 text-gray-900 rounded-tl-sm dark:bg-zinc-800 dark:text-zinc-100"
             }`}
           >
-            <pre className="whitespace-pre-wrap font-sans break-words">
-              {message.content}
-              {message.isStreaming && !message.content && (
-                <span className="inline-flex gap-1">
-                  <span className="animate-bounce delay-0">.</span>
-                  <span className="animate-bounce delay-100">.</span>
-                  <span className="animate-bounce delay-200">.</span>
-                </span>
-              )}
-              {message.isStreaming && message.content && (
-                <span className="inline-block w-0.5 h-4 bg-gray-400 dark:bg-zinc-400 animate-pulse ml-0.5 align-text-bottom" />
-              )}
-            </pre>
+            {/* Render sanitized HTML if present, otherwise plain text */}
+            <div className="whitespace-pre-wrap font-sans break-words" dangerouslySetInnerHTML={{ __html: DOMPurify.sanitize(message.content || "") }} />
+            {message.isStreaming && !message.content && (
+              <span className="inline-flex gap-1">
+                <span className="animate-bounce delay-0">.</span>
+                <span className="animate-bounce delay-100">.</span>
+                <span className="animate-bounce delay-200">.</span>
+              </span>
+            )}
+            {message.isStreaming && message.content && (
+              <span className="inline-block w-0.5 h-4 bg-gray-400 dark:bg-zinc-400 animate-pulse ml-0.5 align-text-bottom" />
+            )}
           </div>
         )}
       </div>
