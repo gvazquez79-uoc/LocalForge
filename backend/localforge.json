@@ -6,8 +6,8 @@
     "filesystem": {
       "enabled": true,
       "allowed_paths": [
-        "G:\\proyectos\\LocalForge",
-        "G:\\Docker\\servidor_php84\\www\\gestor-de-clientes"
+        "G:\\Docker\\servidor_php84\\www\\gestor-de-clientes",
+        "G:\\proyectos\\"
       ],
       "require_confirmation_for": [
         "write_file",
