@@ -9,6 +9,7 @@ venv/
 
 # Secrets
 .env
+localforge.json
 
 # Frontend
 frontend/node_modules/
