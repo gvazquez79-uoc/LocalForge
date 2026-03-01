@@ -17,6 +17,7 @@ load_dotenv()
 
 from backend.config import load_config, get_settings
 from backend.db.store import init_db
+from backend.middleware.auth import api_key_middleware
 from backend.routers.chat import router as chat_router
 from backend.routers.config import router as config_router
 
@@ -43,14 +44,26 @@ app = FastAPI(
     lifespan=lifespan,
 )
 
+# CORS_ORIGINS env var: comma-separated list of allowed origins.
+# In production behind nginx (same-origin), set to "*" or your domain.
+# Default: localhost only (development).
+_raw_origins = os.getenv("CORS_ORIGINS", "")
+_cors_origins: list[str] = (
+    [o.strip() for o in _raw_origins.split(",") if o.strip()]
+    if _raw_origins
+    else ["http://localhost:5173", "http://127.0.0.1:5173",
+          "http://localhost:3000", "http://127.0.0.1:3000"]
+)
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:5173", "http://127.0.0.1:5173",
-                   "http://localhost:3000", "http://127.0.0.1:3000"],
+    allow_origins=_cors_origins,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+app.middleware("http")(api_key_middleware)
 
 app.include_router(chat_router, prefix="/api")
 app.include_router(config_router, prefix="/api")
