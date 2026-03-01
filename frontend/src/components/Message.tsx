@@ -95,7 +95,7 @@ if (typeof window !== "undefined" && !window.codeCopyHandlers) {
 
 export function Message({ message }: MessageProps) {
   const isUser = message.role === "user";
-  const { renderMarkdown } = usePrefs();
+  const { renderMarkdown, showToolCalls } = usePrefs();
 
   const html = useMemo(() => {
     if (!message.content || !renderMarkdown || message.isStreaming) return null;
@@ -118,7 +118,7 @@ export function Message({ message }: MessageProps) {
       </div>
 
       <div className={`flex-1 max-w-[85%] ${isUser ? "items-end" : "items-start"} flex flex-col gap-1`}>
-        {!isUser && message.toolCalls && message.toolCalls.length > 0 && (
+        {!isUser && showToolCalls && message.toolCalls && message.toolCalls.length > 0 && (
           <div className="w-full">
             {message.toolCalls.map((tc) => (
               <ToolBlock key={tc.id} tool={tc} result={message.toolResults?.[tc.id]} />

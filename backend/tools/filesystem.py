@@ -13,16 +13,21 @@ from backend.config import get_config
 from backend.tools.base import BaseTool
 
 
+def _is_under(child: Path, parent: Path) -> bool:
+    """Check if child is under parent, case-insensitively (Windows-safe)."""
+    # Normalize: lowercase + unified separators
+    child_str = os.path.normcase(str(child)).rstrip(os.sep + "/") + os.sep
+    parent_str = os.path.normcase(str(parent)).rstrip(os.sep + "/") + os.sep
+    return child_str.startswith(parent_str)
+
+
 def _resolve_and_check(path: str) -> Path:
     """Resolve path and verify it's inside an allowed directory."""
     resolved = Path(path).expanduser().resolve()
     allowed = get_config().resolve_allowed_paths()
     for allowed_path in allowed:
-        try:
-            resolved.relative_to(allowed_path)
+        if _is_under(resolved, allowed_path):
             return resolved
-        except ValueError:
-            continue
     raise PermissionError(
         f"Access denied: '{resolved}' is outside allowed paths {[str(p) for p in allowed]}"
     )

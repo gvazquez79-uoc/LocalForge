@@ -5,6 +5,8 @@ const KEY = "localforge_prefs";
 interface PrefsState {
   renderMarkdown: boolean;
   setRenderMarkdown: (v: boolean) => void;
+  showToolCalls: boolean;
+  setShowToolCalls: (v: boolean) => void;
 }
 
 function load(): Partial<PrefsState> {
@@ -24,5 +26,10 @@ export const usePrefs = create<PrefsState>((set) => ({
   setRenderMarkdown: (v) => {
     save({ renderMarkdown: v });
     set({ renderMarkdown: v });
+  },
+  showToolCalls: (load().showToolCalls as boolean) ?? true,
+  setShowToolCalls: (v) => {
+    save({ showToolCalls: v });
+    set({ showToolCalls: v });
   },
 }));
