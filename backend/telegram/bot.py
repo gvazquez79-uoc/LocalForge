@@ -66,27 +66,37 @@ async def _get_or_create_conv(chat_id: int) -> str:
 
 
 def _to_telegram_html(text: str) -> str:
-    """Convert markdown to Telegram HTML format."""
-    # Escape HTML first
+    """Convert markdown to Telegram HTML format.
+
+    Order matters: extract code blocks first so their content is not
+    affected by bold/italic regexes (e.g. **kwargs inside code).
+    """
+    placeholders: dict[str, str] = {}
+
+    def save_block(m: re.Match) -> str:
+        key = f"\x00BLK{len(placeholders)}\x00"
+        code = html.escape(m.group(2) if m.group(2) else "")
+        placeholders[key] = f"<pre><code>{code}</code></pre>"
+        return key
+
+    def save_inline(m: re.Match) -> str:
+        key = f"\x00INL{len(placeholders)}\x00"
+        placeholders[key] = f"<code>{html.escape(m.group(1))}</code>"
+        return key
+
+    # 1. Extract fenced code blocks
+    text = re.sub(r"```(?:\w+)?\n(.*?)```", save_block, text, flags=re.DOTALL)
+    # 2. Extract inline code
+    text = re.sub(r"`([^`\n]+)`", save_inline, text)
+    # 3. Escape remaining HTML characters
     text = html.escape(text)
-    
-    # Code blocks: ```lang\ncode\n``` → <pre><code>code</code></pre>
-    text = re.sub(
-        r'```(\w+)?\n(.*?)```',
-        lambda m: f'<pre><code>{m.group(2)}</code></pre>',
-        text,
-        flags=re.DOTALL
-    )
-    
-    # Inline code: `code` → <code>code</code>
-    text = re.sub(r'`([^`]+)`', r'<code>\1</code>', text)
-    
-    # Bold: **text** → <b>text</b>
-    text = re.sub(r'\*\*([^*]+)\*\*', r'<b>\1</b>', text)
-    
-    # Italic: *text* → <i>text</i>
-    text = re.sub(r'\*([^*]+)\*', r'<i>\1</i>', text)
-    
+    # 4. Apply bold / italic on safe text
+    text = re.sub(r"\*\*([^*]+)\*\*", r"<b>\1</b>", text)
+    text = re.sub(r"\*([^*\n]+)\*", r"<i>\1</i>", text)
+    # 5. Restore code placeholders
+    for key, val in placeholders.items():
+        text = text.replace(html.escape(key), val)
+
     return text
 
 
@@ -253,24 +263,28 @@ async def _handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     await context.bot.send_message(chat_id=chat_id, text="❌ Operation cancelled.")
                     return
         
-        # Save assistant message
+        # Persist assistant message
         if full_text:
-            await add_message(
-                conv_id,
-                "assistant",
-                full_text,
-                metadata={}
-            )
-        
-        # Send final response
-        final_text = full_text[:4096]
-        if len(full_text) > 4096:
-            final_text += "\n\n<i>(response truncated)</i>"
-        
-        await sent_message.edit_text(
-            _to_telegram_html(final_text),
-            parse_mode=ParseMode.HTML
-        )
+            await add_message(conv_id, "assistant", full_text, metadata={})
+
+        # Send final response — split if > 4096 chars after HTML conversion
+        html_response = _to_telegram_html(full_text) if full_text else "✅ Done"
+        chunks = _split_message(html_response)
+        for i, chunk in enumerate(chunks):
+            try:
+                if i == 0:
+                    await sent_message.edit_text(chunk, parse_mode=ParseMode.HTML)
+                else:
+                    await context.bot.send_message(
+                        chat_id=chat_id, text=chunk, parse_mode=ParseMode.HTML
+                    )
+            except Exception:
+                # Fallback: strip HTML tags and send as plain text
+                plain = re.sub(r"<[^>]+>", "", chunk)
+                if i == 0:
+                    await sent_message.edit_text(plain)
+                else:
+                    await context.bot.send_message(chat_id=chat_id, text=plain)
         
     except Exception as e:
         logger.exception("Error handling message")
@@ -310,39 +324,48 @@ async def _handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             )
 
 
-async def start_telegram_bot():
-    """Start the Telegram bot."""
+async def start_telegram_bot() -> None:
+    """Start the Telegram bot (non-blocking — returns immediately)."""
     global _app
-    
+
     cfg = get_config()
     if not cfg.telegram.enabled:
-        logger.info("Telegram bot is disabled")
+        logger.info("Telegram bot disabled")
         return
-    
     if not cfg.telegram.bot_token:
         logger.warning("Telegram bot token not configured")
         return
-    
-    logger.info("Starting Telegram bot...")
-    
+
+    logger.info("Starting Telegram bot…")
     _app = Application.builder().token(cfg.telegram.bot_token).build()
-    
-    # Register handlers
+
     _app.add_handler(CommandHandler("start", _handle_start))
     _app.add_handler(CommandHandler("new", _handle_new))
     _app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, _handle_message))
     _app.add_handler(CallbackQueryHandler(_handle_callback))
-    
-    await _app.run_polling(drop_pending_updates=True)
+
+    # Use low-level API so we don't block the FastAPI event loop.
+    # run_polling() is a standalone entry-point and must NOT be used here.
+    await _app.initialize()
+    await _app.start()
+    await _app.updater.start_polling(drop_pending_updates=True)
     logger.info("Telegram bot started")
 
 
-async def stop_telegram_bot():
-    """Stop the Telegram bot."""
+async def stop_telegram_bot() -> None:
+    """Stop the Telegram bot and release resources."""
     global _app
-    
-    if _app:
-        logger.info("Stopping Telegram bot...")
+
+    if _app is None:
+        return
+
+    logger.info("Stopping Telegram bot…")
+    try:
+        await _app.updater.stop()
         await _app.stop()
+        await _app.shutdown()
+    except Exception:
+        logger.exception("Error while stopping Telegram bot")
+    finally:
         _app = None
-        logger.info("Telegram bot stopped")
+    logger.info("Telegram bot stopped")

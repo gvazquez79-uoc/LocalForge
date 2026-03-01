@@ -25,21 +25,15 @@ from backend.routers.config import router as config_router
 async def lifespan(app: FastAPI):
     load_config()
     await init_db()
-    
-    # Start Telegram bot in background
+
+    # start_telegram_bot() is non-blocking: uses initialize/start/start_polling
+    # internally and returns immediately. Do NOT wrap in create_task.
     from backend.telegram.bot import start_telegram_bot, stop_telegram_bot
-    import asyncio
-    bot_task = asyncio.create_task(start_telegram_bot())
-    
+    await start_telegram_bot()
+
     yield
-    
-    # Stop Telegram bot
+
     await stop_telegram_bot()
-    bot_task.cancel()
-    try:
-        await bot_task
-    except asyncio.CancelledError:
-        pass
 
 
 app = FastAPI(
