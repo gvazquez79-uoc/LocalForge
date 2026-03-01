@@ -223,6 +223,15 @@ async def _handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                         pass  # Ignore edit errors
                     last_edit = current_time
             
+            elif event.type == "error":
+                error_msg = event.data.get("message", "Unknown error")
+                logger.error("Agent error: %s", error_msg)
+                await sent_message.edit_text(
+                    f"❌ <b>Error:</b> {html.escape(error_msg)}",
+                    parse_mode=ParseMode.HTML,
+                )
+                return
+
             elif event.type == "tool_confirmation_needed":
                 # Show confirmation inline keyboard
                 data = event.data
