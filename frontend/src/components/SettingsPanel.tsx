@@ -11,12 +11,14 @@ import {
   AlertCircle,
   Sun,
   Moon,
+  Send,
 } from "lucide-react";
 import { getConfig, saveConfig } from "../api/client";
 import type { LocalForgeConfig } from "../api/client";
 import { getStoredTheme, setTheme } from "../store/theme";
 import type { Theme } from "../store/theme";
 import { usePrefs } from "../store/prefs";
+import { useChatStore } from "../store/chat";
 
 interface SettingsPanelProps {
   open: boolean;
@@ -30,6 +32,7 @@ export function SettingsPanel({ open, onClose }: SettingsPanelProps) {
   const [error, setError] = useState<string | null>(null);
   const [theme, setThemeState] = useState<Theme>(getStoredTheme);
   const { renderMarkdown, setRenderMarkdown } = usePrefs();
+  const { models } = useChatStore();
 
   useEffect(() => {
     if (open) {
@@ -65,12 +68,17 @@ export function SettingsPanel({ open, onClose }: SettingsPanelProps) {
   const updateAgent = (patch: Partial<LocalForgeConfig["agent"]>) =>
     setConfig((c) => (c ? { ...c, agent: { ...c.agent, ...patch } } : c));
 
+  const updateTelegram = (patch: Partial<LocalForgeConfig["telegram"]>) =>
+    setConfig((c) =>
+      c ? { ...c, telegram: { ...c.telegram, ...patch } } : c
+    );
+
   const handleSave = async () => {
     if (!config) return;
     setSaving(true);
     setError(null);
     try {
-      await saveConfig({ tools: config.tools, agent: config.agent });
+      await saveConfig({ tools: config.tools, agent: config.agent, telegram: config.telegram });
       setSavedOk(true);
       setTimeout(() => setSavedOk(false), 2500);
     } catch (e) {
@@ -255,6 +263,69 @@ export function SettingsPanel({ open, onClose }: SettingsPanelProps) {
                     className="w-full bg-gray-100 border border-gray-300 dark:bg-zinc-800 dark:border-zinc-700 rounded-lg px-3 py-2 text-xs text-gray-800 dark:text-zinc-200 focus:outline-none focus:border-indigo-500 resize-y"
                   />
                 </div>
+              </Section>
+
+              {/* ── Telegram ── */}
+              <Section icon={<Send size={15} />} title="Telegram">
+                <Toggle
+                  label="Enable Telegram bot"
+                  checked={config.telegram.enabled}
+                  onChange={(v) => updateTelegram({ enabled: v })}
+                />
+                {config.telegram.enabled && (
+                  <>
+                    <div className="space-y-1.5">
+                      <label className="text-xs font-medium text-gray-500 dark:text-zinc-400">
+                        Bot Token
+                      </label>
+                      <input
+                        type="password"
+                        value={config.telegram.bot_token}
+                        onChange={(e) => updateTelegram({ bot_token: e.target.value })}
+                        placeholder="1234567890:ABCdefGHIjklMNOpqrsTUVwxyz"
+                        className="w-full bg-gray-100 border border-gray-300 dark:bg-zinc-800 dark:border-zinc-700 rounded-lg px-3 py-2 text-xs text-gray-800 dark:text-zinc-200 placeholder-gray-400 dark:placeholder-zinc-600 focus:outline-none focus:border-indigo-500 font-mono"
+                      />
+                    </div>
+                    <div className="space-y-1.5">
+                      <label className="text-xs font-medium text-gray-500 dark:text-zinc-400">
+                        Allowed User IDs
+                      </label>
+                      <textarea
+                        value={config.telegram.allowed_user_ids.join("\n")}
+                        onChange={(e) => {
+                          const ids = e.target.value
+                            .split("\n")
+                            .map((s) => parseInt(s.trim(), 10))
+                            .filter((n) => !isNaN(n));
+                          updateTelegram({ allowed_user_ids: ids });
+                        }}
+                        placeholder="Leave empty to allow any user&#10;123456789&#10;987654321"
+                        rows={3}
+                        className="w-full bg-gray-100 border border-gray-300 dark:bg-zinc-800 dark:border-zinc-700 rounded-lg px-3 py-2 text-xs text-gray-800 dark:text-zinc-200 placeholder-gray-400 dark:placeholder-zinc-600 focus:outline-none focus:border-indigo-500 font-mono resize-y"
+                      />
+                      <p className="text-[10px] text-gray-400 dark:text-zinc-500">
+                        Leave empty to allow any user. Get your ID from @userinfobot
+                      </p>
+                    </div>
+                    <div className="space-y-1.5">
+                      <label className="text-xs font-medium text-gray-500 dark:text-zinc-400">
+                        Default Model (optional)
+                      </label>
+                      <select
+                        value={config.telegram.default_model}
+                        onChange={(e) => updateTelegram({ default_model: e.target.value })}
+                        className="w-full bg-gray-100 border border-gray-300 dark:bg-zinc-800 dark:border-zinc-700 rounded-lg px-3 py-2 text-xs text-gray-800 dark:text-zinc-200 focus:outline-none focus:border-indigo-500 cursor-pointer"
+                      >
+                        <option value="">Use global default</option>
+                        {models.map((m) => (
+                          <option key={m.name} value={m.name} disabled={!m.available}>
+                            {m.display_name}{!m.available ? " (no key)" : ""}
+                          </option>
+                        ))}
+                      </select>
+                    </div>
+                  </>
+                )}
               </Section>
             </>
           )}
