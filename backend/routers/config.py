@@ -146,7 +146,7 @@ async def update_config(body: UpdateConfigRequest):
         # Only update fields that are provided
         if "enabled" in body.telegram:
             current["enabled"] = body.telegram["enabled"]
-        if "bot_token" in body.telegram and body.telegram["bot_token"]:
+        if "bot_token" in body.telegram and body.telegram["bot_token"] and body.telegram["bot_token"] != "***":
             current["bot_token"] = body.telegram["bot_token"]
         if "allowed_user_ids" in body.telegram:
             current["allowed_user_ids"] = body.telegram["allowed_user_ids"]
@@ -159,3 +159,13 @@ async def update_config(body: UpdateConfigRequest):
 
     save_config(cfg)
     return {"ok": True}
+
+
+@router.post("/telegram/restart")
+async def restart_telegram():
+    """Stop and restart the Telegram bot with the current config (no backend restart needed)."""
+    from backend.telegram.bot import stop_telegram_bot, start_telegram_bot
+    await stop_telegram_bot()
+    await start_telegram_bot()
+    cfg = get_config()
+    return {"ok": True, "running": cfg.telegram.enabled and bool(cfg.telegram.bot_token)}

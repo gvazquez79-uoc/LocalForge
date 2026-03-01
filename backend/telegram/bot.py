@@ -75,7 +75,7 @@ def _to_telegram_html(text: str) -> str:
 
     def save_block(m: re.Match) -> str:
         key = f"\x00BLK{len(placeholders)}\x00"
-        code = html.escape(m.group(2) if m.group(2) else "")
+        code = html.escape(m.group(1) if m.group(1) else "")
         placeholders[key] = f"<pre><code>{code}</code></pre>"
         return key
 
@@ -332,24 +332,28 @@ async def start_telegram_bot() -> None:
     if not cfg.telegram.enabled:
         logger.info("Telegram bot disabled")
         return
-    if not cfg.telegram.bot_token:
-        logger.warning("Telegram bot token not configured")
+    if not cfg.telegram.bot_token or cfg.telegram.bot_token == "***":
+        logger.warning("Telegram bot token not configured — skipping")
         return
 
     logger.info("Starting Telegram bot…")
-    _app = Application.builder().token(cfg.telegram.bot_token).build()
+    try:
+        _app = Application.builder().token(cfg.telegram.bot_token).build()
 
-    _app.add_handler(CommandHandler("start", _handle_start))
-    _app.add_handler(CommandHandler("new", _handle_new))
-    _app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, _handle_message))
-    _app.add_handler(CallbackQueryHandler(_handle_callback))
+        _app.add_handler(CommandHandler("start", _handle_start))
+        _app.add_handler(CommandHandler("new", _handle_new))
+        _app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, _handle_message))
+        _app.add_handler(CallbackQueryHandler(_handle_callback))
 
-    # Use low-level API so we don't block the FastAPI event loop.
-    # run_polling() is a standalone entry-point and must NOT be used here.
-    await _app.initialize()
-    await _app.start()
-    await _app.updater.start_polling(drop_pending_updates=True)
-    logger.info("Telegram bot started")
+        # Use low-level API so we don't block the FastAPI event loop.
+        # run_polling() is a standalone entry-point and must NOT be used here.
+        await _app.initialize()
+        await _app.start()
+        await _app.updater.start_polling(drop_pending_updates=True)
+        logger.info("Telegram bot started")
+    except Exception:
+        logger.exception("Failed to start Telegram bot — check token in settings")
+        _app = None
 
 
 async def stop_telegram_bot() -> None:

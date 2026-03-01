@@ -114,6 +114,12 @@ export interface LocalForgeConfig {
     max_iterations: number;
     system_prompt: string;
   };
+  telegram: {
+    enabled: boolean;
+    bot_token: string;
+    allowed_user_ids: number[];
+    default_model: string;
+  };
 }
 
 export async function getConfig(): Promise<LocalForgeConfig> {
@@ -123,7 +129,7 @@ export async function getConfig(): Promise<LocalForgeConfig> {
 }
 
 export async function saveConfig(
-  data: Partial<Pick<LocalForgeConfig, "tools" | "agent" | "default_model">>
+  data: Partial<Pick<LocalForgeConfig, "tools" | "agent" | "default_model" | "telegram">>
 ): Promise<void> {
   const res = await fetch(`${BASE}/config`, {
     method: "PUT",
@@ -131,6 +137,12 @@ export async function saveConfig(
     body: JSON.stringify(data),
   });
   if (!res.ok) throw new Error(await res.text());
+}
+
+export async function restartTelegramBot(): Promise<{ ok: boolean; running: boolean }> {
+  const res = await fetch(`${BASE}/config/telegram/restart`, { method: "POST" });
+  if (!res.ok) throw new Error(await res.text());
+  return res.json();
 }
 
 // ── Models ───────────────────────────────────────────────────────────────────

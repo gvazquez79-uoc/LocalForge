@@ -13,7 +13,7 @@ import {
   Moon,
   Send,
 } from "lucide-react";
-import { getConfig, saveConfig } from "../api/client";
+import { getConfig, saveConfig, restartTelegramBot } from "../api/client";
 import type { LocalForgeConfig } from "../api/client";
 import { getStoredTheme, setTheme } from "../store/theme";
 import type { Theme } from "../store/theme";
@@ -30,16 +30,27 @@ export function SettingsPanel({ open, onClose }: SettingsPanelProps) {
   const [saving, setSaving] = useState(false);
   const [savedOk, setSavedOk] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [telegramStatus, setTelegramStatus] = useState<"idle" | "restarting" | "ok" | "error">("idle");
+  const [tokenAlreadySet, setTokenAlreadySet] = useState(false);
   const [theme, setThemeState] = useState<Theme>(getStoredTheme);
-  const { renderMarkdown, setRenderMarkdown } = usePrefs();
+  const { renderMarkdown, setRenderMarkdown, showToolCalls, setShowToolCalls } = usePrefs();
   const { models } = useChatStore();
 
   useEffect(() => {
     if (open) {
       setError(null);
       setSavedOk(false);
+      setTelegramStatus("idle");
       getConfig()
-        .then(setConfig)
+        .then((cfg) => {
+          // If server masked the token with ***, show empty field so user knows to re-enter
+          const masked = cfg.telegram.bot_token === "***";
+          setTokenAlreadySet(masked);
+          setConfig({
+            ...cfg,
+            telegram: { ...cfg.telegram, bot_token: masked ? "" : cfg.telegram.bot_token },
+          });
+        })
         .catch(() => setError("Failed to load config from backend."));
     }
   }, [open]);
@@ -68,10 +79,12 @@ export function SettingsPanel({ open, onClose }: SettingsPanelProps) {
   const updateAgent = (patch: Partial<LocalForgeConfig["agent"]>) =>
     setConfig((c) => (c ? { ...c, agent: { ...c.agent, ...patch } } : c));
 
-  const updateTelegram = (patch: Partial<LocalForgeConfig["telegram"]>) =>
+  const updateTelegram = (patch: Partial<LocalForgeConfig["telegram"]>) => {
+    setTelegramStatus("idle");
     setConfig((c) =>
       c ? { ...c, telegram: { ...c.telegram, ...patch } } : c
     );
+  };
 
   const handleSave = async () => {
     if (!config) return;
@@ -80,7 +93,16 @@ export function SettingsPanel({ open, onClose }: SettingsPanelProps) {
     try {
       await saveConfig({ tools: config.tools, agent: config.agent, telegram: config.telegram });
       setSavedOk(true);
-      setTimeout(() => setSavedOk(false), 2500);
+      setTimeout(() => setSavedOk(false), 3000);
+
+      // Auto-restart Telegram bot so changes take effect immediately
+      setTelegramStatus("restarting");
+      try {
+        const result = await restartTelegramBot();
+        setTelegramStatus(result.running ? "ok" : "idle");
+      } catch {
+        setTelegramStatus("error");
+      }
     } catch (e) {
       setError(String(e));
     } finally {
@@ -142,6 +164,11 @@ export function SettingsPanel({ open, onClose }: SettingsPanelProps) {
               label="Render markdown in messages"
               checked={renderMarkdown}
               onChange={setRenderMarkdown}
+            />
+            <Toggle
+              label="Show tool steps (advanced mode)"
+              checked={showToolCalls}
+              onChange={setShowToolCalls}
             />
           </Section>
 
@@ -272,6 +299,24 @@ export function SettingsPanel({ open, onClose }: SettingsPanelProps) {
                   checked={config.telegram.enabled}
                   onChange={(v) => updateTelegram({ enabled: v })}
                 />
+                {telegramStatus === "restarting" && (
+                  <div className="flex items-center gap-2 px-3 py-2 rounded-lg bg-blue-50 border border-blue-200 dark:bg-blue-950/40 dark:border-blue-800/50">
+                    <div className="w-3 h-3 border-2 border-blue-400 border-t-transparent rounded-full animate-spin flex-shrink-0" />
+                    <p className="text-[11px] text-blue-700 dark:text-blue-400">Restarting Telegram bot…</p>
+                  </div>
+                )}
+                {telegramStatus === "ok" && (
+                  <div className="flex items-center gap-2 px-3 py-2 rounded-lg bg-green-50 border border-green-200 dark:bg-green-950/40 dark:border-green-800/50">
+                    <Check size={13} className="text-green-500 flex-shrink-0" />
+                    <p className="text-[11px] text-green-700 dark:text-green-400">Telegram bot running — send /start to your bot</p>
+                  </div>
+                )}
+                {telegramStatus === "error" && (
+                  <div className="flex items-center gap-2 px-3 py-2 rounded-lg bg-red-50 border border-red-200 dark:bg-red-950/40 dark:border-red-800/50">
+                    <AlertCircle size={13} className="text-red-500 flex-shrink-0" />
+                    <p className="text-[11px] text-red-700 dark:text-red-400">Bot failed to start — check token and backend logs</p>
+                  </div>
+                )}
                 {config.telegram.enabled && (
                   <>
                     <div className="space-y-1.5">
@@ -282,7 +327,7 @@ export function SettingsPanel({ open, onClose }: SettingsPanelProps) {
                         type="password"
                         value={config.telegram.bot_token}
                         onChange={(e) => updateTelegram({ bot_token: e.target.value })}
-                        placeholder="1234567890:ABCdefGHIjklMNOpqrsTUVwxyz"
+                        placeholder={tokenAlreadySet ? "Token already set — enter new one to change" : "1234567890:ABCdefGHIjklMNOpqrsTUVwxyz"}
                         className="w-full bg-gray-100 border border-gray-300 dark:bg-zinc-800 dark:border-zinc-700 rounded-lg px-3 py-2 text-xs text-gray-800 dark:text-zinc-200 placeholder-gray-400 dark:placeholder-zinc-600 focus:outline-none focus:border-indigo-500 font-mono"
                       />
                     </div>
