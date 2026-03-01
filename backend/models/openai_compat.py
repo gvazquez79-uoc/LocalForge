@@ -63,7 +63,15 @@ class OpenAICompatAdapter(BaseModelAdapter):
             emitted_done = False
 
             # openai v2.x: create() with stream=True returns AsyncStream[ChatCompletionChunk]
-            stream = await client.chat.completions.create(**kwargs)
+            # If the model doesn't support tools, retry once without them
+            try:
+                stream = await client.chat.completions.create(**kwargs)
+            except Exception as e:
+                if "does not support tools" in str(e).lower() and "tools" in kwargs:
+                    kwargs.pop("tools")
+                    stream = await client.chat.completions.create(**kwargs)
+                else:
+                    raise
 
             async for chunk in stream:
                 if not chunk.choices:
