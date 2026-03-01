@@ -44,14 +44,61 @@ class CreateConversationRequest(BaseModel):
     title: str = "New conversation"
 
 
+class ImageData(BaseModel):
+    name: str
+    data_url: str   # full data:mime/type;base64,... string
+    mime_type: str
+
+
 class SendMessageRequest(BaseModel):
     content: str
-    model: str | None = None  # override model for this turn
+    model: str | None = None   # override model for this turn
+    images: list[ImageData] = []
 
 
 class ApproveRequest(BaseModel):
     tool_use_id: str
     approved: bool
+
+
+def _build_multimodal_content(text: str, images: list[ImageData]) -> str | list:
+    """
+    Build Anthropic-format multimodal content blocks from text + image/PDF data.
+    The Anthropic adapter passes this through as-is.
+    The OpenAI adapter converts image blocks to image_url format.
+    """
+    if not images:
+        return text
+
+    blocks: list[dict] = []
+    if text:
+        blocks.append({"type": "text", "text": text})
+
+    for img in images:
+        # Strip the "data:mime;base64," prefix to get raw base64
+        b64_data = img.data_url.split(",", 1)[1] if "," in img.data_url else img.data_url
+
+        if img.mime_type == "application/pdf":
+            # Anthropic native PDF support (Claude 3.5+)
+            blocks.append({
+                "type": "document",
+                "source": {
+                    "type": "base64",
+                    "media_type": "application/pdf",
+                    "data": b64_data,
+                },
+            })
+        else:
+            blocks.append({
+                "type": "image",
+                "source": {
+                    "type": "base64",
+                    "media_type": img.mime_type,
+                    "data": b64_data,
+                },
+            })
+
+    return blocks
 
 
 @router.post("")
@@ -109,13 +156,20 @@ async def send_message(conv_id: str, body: SendMessageRequest):
     stored_before = await get_messages(conv_id)
     is_first_message = all(m["role"] != "user" for m in stored_before)
 
-    # Persist user message
+    # Persist only the text to DB (binary data is not stored)
     await add_message(conv_id, "user", body.content)
 
-    # Load full history
+    # Load full history (text only)
     stored = await get_messages(conv_id)
     messages = [{"role": m["role"], "content": m["content"]} for m in stored
                 if m["role"] in ("user", "assistant")]
+
+    # Replace the last user message with multimodal content if images were attached
+    if body.images and messages and messages[-1]["role"] == "user":
+        messages[-1] = {
+            "role": "user",
+            "content": _build_multimodal_content(body.content, body.images),
+        }
 
     adapter = get_adapter(model_name)
 
@@ -133,7 +187,6 @@ async def send_message(conv_id: str, body: SendMessageRequest):
             elif event.type == "tool_call":
                 tool_events.append(event.data)
             elif event.type == "done" and is_first_message and not title_generated:
-                # Generate title after first response
                 title_generated = True
                 try:
                     title_adapter = get_adapter(model_name)
@@ -144,8 +197,9 @@ async def send_message(conv_id: str, body: SendMessageRequest):
                             title_text += title_event.data["text"]
                     if title_text.strip():
                         clean_title = title_text.strip().strip('"').split('\n')[0][:50]
-                        # Validate: reject short/garbage titles
-                        if clean_title and len(clean_title) >= 3 and clean_title.lower() not in ("false", "none", "null", "error", "ok"):
+                        if clean_title and len(clean_title) >= 3 and clean_title.lower() not in (
+                            "false", "none", "null", "error", "ok"
+                        ):
                             await update_conversation_title(conv_id, clean_title)
                             yield f"data: {json.dumps({'type': 'title_updated', 'data': {'title': clean_title}})}\n\n"
                 except Exception:

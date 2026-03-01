@@ -1,7 +1,7 @@
 import { useMemo } from "react";
 import type { UIMessage } from "../store/chat";
 import { ToolBlock } from "./ToolBlock";
-import { Bot, User } from "lucide-react";
+import { Bot, User, FileText } from "lucide-react";
 import DOMPurify from "dompurify";
 import { marked } from "marked";
 import { usePrefs } from "../store/prefs";
@@ -123,6 +123,28 @@ export function Message({ message }: MessageProps) {
             {message.toolCalls.map((tc) => (
               <ToolBlock key={tc.id} tool={tc} result={message.toolResults?.[tc.id]} />
             ))}
+          </div>
+        )}
+
+        {/* Attachment previews (images + PDFs) — shown above text for user messages */}
+        {isUser && message.attachments && message.attachments.length > 0 && (
+          <div className="flex flex-wrap gap-2 justify-end mb-1">
+            {message.attachments.map((att, i) =>
+              att.isPdf ? (
+                <div key={i} className="flex items-center gap-1.5 px-2.5 py-1.5 bg-indigo-500/80 rounded-lg text-xs text-white">
+                  <FileText size={13} />
+                  <span className="max-w-[160px] truncate">{att.name}</span>
+                </div>
+              ) : (
+                <img
+                  key={i}
+                  src={att.dataUrl}
+                  alt={att.name}
+                  title={att.name}
+                  className="h-24 max-w-[200px] object-cover rounded-lg border border-indigo-400/50"
+                />
+              )
+            )}
           </div>
         )}
 

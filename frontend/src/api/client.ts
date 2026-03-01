@@ -1,4 +1,35 @@
-const BASE = "http://localhost:8000/api";
+// En desarrollo: http://localhost:8000/api
+// En producción con nginx: /api  (misma IP/dominio, proxy inverso)
+// Configurable con: VITE_API_BASE=https://tu-servidor.com/api npm run build
+const BASE = (import.meta.env.VITE_API_BASE as string | undefined) ?? "http://localhost:8000/api";
+
+// ── API Key auth ──────────────────────────────────────────────────────────────
+const STORAGE_KEY_AUTH = "localforge_api_key";
+
+export function getApiKey(): string {
+  return localStorage.getItem(STORAGE_KEY_AUTH) ?? "";
+}
+
+export function setApiKey(key: string): void {
+  if (key) localStorage.setItem(STORAGE_KEY_AUTH, key);
+  else localStorage.removeItem(STORAGE_KEY_AUTH);
+}
+
+/** Returns auth headers if a key is stored, empty object otherwise */
+function authHeaders(): Record<string, string> {
+  const key = getApiKey();
+  return key ? { "X-API-Key": key } : {};
+}
+
+/** Check if the current key is valid (or if auth is disabled on the server) */
+export async function checkAuth(): Promise<boolean> {
+  try {
+    const res = await fetch(`${BASE}/health`, { headers: authHeaders() });
+    return res.ok; // 200 = ok, 401 = wrong key
+  } catch {
+    return false; // backend offline
+  }
+}
 
 export interface Conversation {
   id: string;
@@ -48,7 +79,7 @@ export interface ToolCallData {
 export async function createConversation(model: string): Promise<Conversation> {
   const res = await fetch(`${BASE}/conversations`, {
     method: "POST",
-    headers: { "Content-Type": "application/json" },
+    headers: { "Content-Type": "application/json", ...authHeaders() },
     body: JSON.stringify({ model }),
   });
   if (!res.ok) throw new Error(await res.text());
@@ -56,25 +87,25 @@ export async function createConversation(model: string): Promise<Conversation> {
 }
 
 export async function listConversations(): Promise<Conversation[]> {
-  const res = await fetch(`${BASE}/conversations`);
+  const res = await fetch(`${BASE}/conversations`, { headers: authHeaders() });
   if (!res.ok) throw new Error(await res.text());
   return res.json();
 }
 
 export async function getConversation(id: string): Promise<Conversation> {
-  const res = await fetch(`${BASE}/conversations/${id}`);
+  const res = await fetch(`${BASE}/conversations/${id}`, { headers: authHeaders() });
   if (!res.ok) throw new Error(await res.text());
   return res.json();
 }
 
 export async function deleteConversation(id: string): Promise<void> {
-  await fetch(`${BASE}/conversations/${id}`, { method: "DELETE" });
+  await fetch(`${BASE}/conversations/${id}`, { method: "DELETE", headers: authHeaders() });
 }
 
 export async function renameConversation(id: string, title: string): Promise<void> {
   await fetch(`${BASE}/conversations/${id}/title`, {
     method: "PATCH",
-    headers: { "Content-Type": "application/json" },
+    headers: { "Content-Type": "application/json", ...authHeaders() },
     body: JSON.stringify({ title }),
   });
 }
@@ -82,7 +113,7 @@ export async function renameConversation(id: string, title: string): Promise<voi
 export async function approveTool(convId: string, toolUseId: string, approved: boolean): Promise<void> {
   await fetch(`${BASE}/conversations/${convId}/approve`, {
     method: "POST",
-    headers: { "Content-Type": "application/json" },
+    headers: { "Content-Type": "application/json", ...authHeaders() },
     body: JSON.stringify({ tool_use_id: toolUseId, approved }),
   });
 }
@@ -123,7 +154,7 @@ export interface LocalForgeConfig {
 }
 
 export async function getConfig(): Promise<LocalForgeConfig> {
-  const res = await fetch(`${BASE}/config`);
+  const res = await fetch(`${BASE}/config`, { headers: authHeaders() });
   if (!res.ok) throw new Error(await res.text());
   return res.json();
 }
@@ -133,14 +164,17 @@ export async function saveConfig(
 ): Promise<void> {
   const res = await fetch(`${BASE}/config`, {
     method: "PUT",
-    headers: { "Content-Type": "application/json" },
+    headers: { "Content-Type": "application/json", ...authHeaders() },
     body: JSON.stringify(data),
   });
   if (!res.ok) throw new Error(await res.text());
 }
 
 export async function restartTelegramBot(): Promise<{ ok: boolean; running: boolean }> {
-  const res = await fetch(`${BASE}/config/telegram/restart`, { method: "POST" });
+  const res = await fetch(`${BASE}/config/telegram/restart`, {
+    method: "POST",
+    headers: authHeaders(),
+  });
   if (!res.ok) throw new Error(await res.text());
   return res.json();
 }
@@ -153,17 +187,24 @@ export interface ModelsResponse {
 }
 
 export async function listModels(): Promise<ModelsResponse> {
-  const res = await fetch(`${BASE}/config/models`);
+  const res = await fetch(`${BASE}/config/models`, { headers: authHeaders() });
   if (!res.ok) throw new Error(await res.text());
   return res.json();
 }
 
 // ── Streaming chat ────────────────────────────────────────────────────────────
 
+export interface ImagePayload {
+  name: string;
+  data_url: string;
+  mime_type: string;
+}
+
 export function streamChat(
   convId: string,
   content: string,
   model: string,
+  images: ImagePayload[] | undefined,
   onEvent: (event: StreamEvent) => void,
   onDone: () => void,
   onError: (msg: string) => void
@@ -173,10 +214,13 @@ export function streamChat(
 
   (async () => {
     try {
+      const body: Record<string, unknown> = { content, model };
+      if (images && images.length > 0) body.images = images;
+
       const res = await fetch(`${BASE}/conversations/${convId}/chat`, {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ content, model }),
+        headers: { "Content-Type": "application/json", ...authHeaders() },
+        body: JSON.stringify(body),
         signal: controller.signal,
       });
 

@@ -12,6 +12,12 @@ import {
   approveTool,
 } from "../api/client";
 
+// Exported so ChatWindow can use it
+export interface ImagePayload {
+  name: string;
+  data_url: string;   // full data:mime;base64,... string
+  mime_type: string;
+}
 
 export interface UIMessage {
   id: string;
@@ -20,6 +26,8 @@ export interface UIMessage {
   toolCalls?: ToolCallData[];
   toolResults?: Record<string, string>; // tool_use_id → result
   isStreaming?: boolean;
+  /** Binary attachments shown in the message bubble (images / PDFs) */
+  attachments?: Array<{ name: string; dataUrl: string; isPdf: boolean }>;
 }
 
 interface ChatState {
@@ -38,7 +46,7 @@ interface ChatState {
   newConversation: () => Promise<void>;
   deleteConv: (id: string) => Promise<void>;
   renameConv: (id: string, title: string) => Promise<void>;
-  sendMessage: (content: string) => void;
+  sendMessage: (content: string, images?: ImagePayload[]) => void;
   setModel: (model: string) => void;
   stopStream: (() => void) | null;
   approveConfirmation: () => void;
@@ -80,8 +88,8 @@ export const useChatStore = create<ChatState>((set, get) => ({
   selectConversation: async (id: string) => {
     const conv = await getConversation(id);
     const messages: UIMessage[] = (conv.messages ?? [])
-      .filter((m) => m.role === "user" || m.role === "assistant")
-      .map((m) => ({
+      .filter(m => m.role === "user" || m.role === "assistant")
+      .map(m => ({
         id: m.id,
         role: m.role as "user" | "assistant",
         content: typeof m.content === "string" ? m.content : JSON.stringify(m.content),
@@ -93,7 +101,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
   newConversation: async () => {
     const { selectedModel } = get();
     const conv = await createConversation(selectedModel);
-    set((s) => ({
+    set(s => ({
       conversations: [conv, ...s.conversations],
       activeConvId: conv.id,
       messages: [],
@@ -103,8 +111,8 @@ export const useChatStore = create<ChatState>((set, get) => ({
   deleteConv: async (id: string) => {
     await deleteConversation(id);
     const { activeConvId } = get();
-    set((s) => ({
-      conversations: s.conversations.filter((c) => c.id !== id),
+    set(s => ({
+      conversations: s.conversations.filter(c => c.id !== id),
       activeConvId: activeConvId === id ? null : activeConvId,
       messages: activeConvId === id ? [] : s.messages,
     }));
@@ -114,10 +122,8 @@ export const useChatStore = create<ChatState>((set, get) => ({
     const trimmed = title.trim();
     if (!trimmed) return;
     await renameConversation(id, trimmed);
-    set((s) => ({
-      conversations: s.conversations.map((c) =>
-        c.id === id ? { ...c, title: trimmed } : c
-      ),
+    set(s => ({
+      conversations: s.conversations.map(c => c.id === id ? { ...c, title: trimmed } : c),
     }));
   },
 
@@ -129,7 +135,6 @@ export const useChatStore = create<ChatState>((set, get) => ({
   approveConfirmation: async () => {
     const { pendingConfirmation, activeConvId } = get();
     if (pendingConfirmation && activeConvId) {
-      // Send approval to backend and wait
       await approveTool(activeConvId, pendingConfirmation.tool_use_id, true);
     }
     set({ pendingConfirmation: null });
@@ -138,35 +143,41 @@ export const useChatStore = create<ChatState>((set, get) => ({
   rejectConfirmation: async () => {
     const { pendingConfirmation, activeConvId } = get();
     if (pendingConfirmation && activeConvId) {
-      // Send rejection to backend and wait
       await approveTool(activeConvId, pendingConfirmation.tool_use_id, false);
     }
     set({ pendingConfirmation: null, isLoading: false });
   },
 
-  sendMessage: (content: string) => {
+  sendMessage: (content: string, images?: ImagePayload[]) => {
     const { activeConvId, selectedModel, stopStream } = get();
     if (!activeConvId) return;
 
-    // Stop any existing stream
     stopStream?.();
 
+    // Build attachment display info for the bubble
+    const attachments = images?.map(img => ({
+      name:    img.name,
+      dataUrl: img.data_url,
+      isPdf:   img.mime_type === "application/pdf",
+    }));
+
     const userMsg: UIMessage = {
-      id: `user-${Date.now()}`,
+      id:   `user-${Date.now()}`,
       role: "user",
       content,
+      attachments: attachments && attachments.length > 0 ? attachments : undefined,
     };
 
     const assistantMsg: UIMessage = {
-      id: `assistant-${Date.now()}`,
-      role: "assistant",
-      content: "",
-      toolCalls: [],
+      id:          `assistant-${Date.now()}`,
+      role:        "assistant",
+      content:     "",
+      toolCalls:   [],
       toolResults: {},
       isStreaming: true,
     };
 
-    set((s) => ({
+    set(s => ({
       messages: [...s.messages, userMsg, assistantMsg],
       isLoading: true,
       error: null,
@@ -176,35 +187,30 @@ export const useChatStore = create<ChatState>((set, get) => ({
       activeConvId,
       content,
       selectedModel,
+      images,
       (event: StreamEvent) => {
-        // Handle title_updated event
         if (event.type === "title_updated") {
           const newTitle = (event.data as { title: string }).title;
-          set((s) => ({
-            conversations: s.conversations.map((c) =>
+          set(s => ({
+            conversations: s.conversations.map(c =>
               c.id === activeConvId ? { ...c, title: newTitle } : c
             ),
           }));
           return;
         }
 
-        // Handle confirmation needed
         if (event.type === "tool_confirmation_needed") {
           const confirmation = event.data as PendingConfirmation;
           set({ pendingConfirmation: confirmation, isLoading: false });
           return;
         }
 
-        // Handle tool result - this means confirmation was resolved
         if (event.type === "tool_result") {
-          // Clear any pending confirmation since we got the result
           const { pendingConfirmation } = get();
-          if (pendingConfirmation) {
-            set({ pendingConfirmation: null });
-          }
+          if (pendingConfirmation) set({ pendingConfirmation: null });
         }
 
-        set((s) => {
+        set(s => {
           const msgs = [...s.messages];
           const last = msgs[msgs.length - 1];
           if (!last || last.role !== "assistant") return {};
@@ -218,10 +224,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
             updated.toolCalls = [...(updated.toolCalls ?? []), tc];
           } else if (event.type === "tool_result") {
             const tr = event.data as { tool_use_id: string; result: string };
-            updated.toolResults = {
-              ...(updated.toolResults ?? {}),
-              [tr.tool_use_id]: tr.result,
-            };
+            updated.toolResults = { ...(updated.toolResults ?? {}), [tr.tool_use_id]: tr.result };
           }
 
           msgs[msgs.length - 1] = updated;
@@ -229,7 +232,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
         });
       },
       () => {
-        set((s) => {
+        set(s => {
           const msgs = [...s.messages];
           const last = msgs[msgs.length - 1];
           if (last?.role === "assistant") {
