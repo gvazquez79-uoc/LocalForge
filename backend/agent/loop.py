@@ -6,11 +6,31 @@ from __future__ import annotations
 
 import asyncio
 import json
+from pathlib import Path
 from typing import AsyncIterator
 
 from backend.config import get_config
 from backend.models.base import BaseModelAdapter, StreamEvent
 from backend.tools.base import BaseTool
+
+# Persistent memory file — shared across all conversations
+MEMORY_FILE = Path.home() / ".localforge_memory.md"
+
+
+def _load_memory() -> str:
+    """Load persistent memory and return it as a system prompt addendum."""
+    if not MEMORY_FILE.exists():
+        return ""
+    content = MEMORY_FILE.read_text(encoding="utf-8").strip()
+    if not content:
+        return ""
+    return (
+        "\n\n---\n"
+        "**MEMORIA PERSISTENTE** (información guardada en sesiones anteriores — "
+        "úsala como contexto adicional):\n\n"
+        f"{content}\n"
+        "---"
+    )
 
 
 def get_enabled_tools() -> list[BaseTool]:
@@ -90,7 +110,7 @@ async def run_agent(
     is_anthropic = "anthropic" in type(adapter).__name__.lower()
     schema_tools = _tools_to_anthropic(tools) if is_anthropic else _tools_to_openai(tools)
 
-    system = cfg.agent.system_prompt
+    system = cfg.agent.system_prompt + _load_memory()
     working_messages = list(messages)
     max_iter = cfg.agent.max_iterations
 
