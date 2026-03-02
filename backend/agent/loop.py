@@ -61,6 +61,40 @@ def _tools_to_openai(tools: list[BaseTool]) -> list[dict]:
     return [t.to_openai_schema() for t in tools]
 
 
+# Phrases that indicate the model claims to have done something without a tool call
+_HALLUCINATION_PATTERNS = [
+    "acabo de guardar",
+    "he guardado",
+    "ya guardé",
+    "se ha guardado",
+    "guardado en memoria",
+    "lo he guardado",
+    "acabo de ejecutar",
+    "he ejecutado",
+    "ya ejecuté",
+    "acabo de escribir",
+    "he escrito",
+    "acabo de realizar",
+    "he realizado",
+    "acabo de leer",
+    "he leído",
+    "acabo de hacer",
+    "he hecho",
+    "listo, he ",
+    "perfecto, acabo",
+    "i have saved",
+    "i've saved",
+    "i have written",
+    "i've written",
+]
+
+
+def _detect_hallucinated_action(text: str) -> bool:
+    """Return True if the model claims to have taken an action without calling a tool."""
+    lower = text.lower()
+    return any(pattern in lower for pattern in _HALLUCINATION_PATTERNS)
+
+
 def _requires_confirmation(tool_name: str, tool_input: dict) -> bool:
     """Check if a tool call requires user confirmation."""
     cfg = get_config()
@@ -155,6 +189,21 @@ async def run_agent(
             working_messages.append({"role": "assistant", "content": assistant_text})
 
         if not tool_calls:
+            # Detect if the model claimed to do something without calling a tool
+            if assistant_text and _detect_hallucinated_action(assistant_text):
+                correction = (
+                    "[SISTEMA] Dijiste que realizaste una acción pero no llamaste "
+                    "a ninguna herramienta. Debes usar la herramienta apropiada "
+                    "AHORA MISMO para completar lo que prometiste. "
+                    "No respondas con texto — llama directamente a la herramienta."
+                )
+                yield StreamEvent(
+                    type="warning",
+                    data={"message": "⚠️ El modelo afirmó realizar una acción sin usar herramientas. Solicitando corrección..."},
+                )
+                working_messages.append({"role": "user", "content": correction})
+                # Continue to next iteration so the model can actually call the tool
+                continue
             return
 
         # Execute each tool call

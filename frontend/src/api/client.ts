@@ -57,7 +57,7 @@ export interface ModelInfo {
 }
 
 export interface StreamEvent {
-  type: "text_delta" | "tool_call" | "tool_result" | "iteration" | "done" | "error" | "title_updated" | "tool_confirmation_needed";
+  type: "text_delta" | "tool_call" | "tool_result" | "iteration" | "done" | "error" | "warning" | "title_updated" | "tool_confirmation_needed";
   data: Record<string, unknown>;
 }
 
