@@ -217,7 +217,9 @@ export const useChatStore = create<ChatState>((set, get) => ({
 
           const updated = { ...last };
 
-          if (event.type === "text_delta") {
+          if (event.type === "warning") {
+            updated.content += `\n\n> ${(event.data as { message: string }).message}`;
+          } else if (event.type === "text_delta") {
             updated.content += (event.data as { text: string }).text;
           } else if (event.type === "tool_call") {
             const tc = event.data as unknown as ToolCallData;
