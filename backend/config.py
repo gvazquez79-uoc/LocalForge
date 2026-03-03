@@ -147,6 +147,42 @@ def save_config(config: LocalForgeConfig, path: Optional[str] = None) -> None:
     _config = config
 
 
+async def save_config_to_db(config: LocalForgeConfig) -> None:
+    """Save non-model config fields to DB. Models have their own table."""
+    global _config
+    _config = config
+    from backend.db.settings_store import save_app_config
+    data = config.model_dump(exclude={"models"})
+    await save_app_config(data)
+
+
+async def refresh_config_from_db() -> None:
+    """Load non-model config from DB and update in-memory config.
+
+    If DB has no stored config yet (first run / migration), seeds it from the
+    currently loaded JSON values so future saves go to DB only.
+    """
+    global _config
+    if _config is None:
+        _config = load_config()
+    try:
+        from backend.db.settings_store import get_app_config, save_app_config
+        data = await get_app_config()
+        if data is None:
+            # First run — seed DB from localforge.json values
+            seed = _config.model_dump(exclude={"models"})
+            await save_app_config(seed)
+        else:
+            # DB is the source of truth — override in-memory config
+            current = _config.model_dump()
+            for key in ("version", "default_model", "tools", "agent", "telegram"):
+                if key in data:
+                    current[key] = data[key]
+            _config = LocalForgeConfig(**current)
+    except Exception:
+        pass  # DB unavailable — keep JSON config
+
+
 async def refresh_models_from_db() -> None:
     """Load models from DB and update the in-memory config.
     Called at startup and after any model CRUD operation."""

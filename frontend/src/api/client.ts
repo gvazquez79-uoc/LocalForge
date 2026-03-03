@@ -31,6 +31,24 @@ export async function checkAuth(): Promise<boolean> {
   }
 }
 
+export interface HealthStatus {
+  api_ok: boolean;
+  db_ok: boolean;
+  db_type: string;
+}
+
+/** Full health check including DB status */
+export async function checkHealth(): Promise<HealthStatus> {
+  try {
+    const res = await fetch(`${BASE}/health`, { headers: authHeaders() });
+    if (!res.ok) return { api_ok: false, db_ok: false, db_type: "unknown" };
+    const data = await res.json();
+    return { api_ok: true, db_ok: data.db_ok ?? false, db_type: data.db_type ?? "unknown" };
+  } catch {
+    return { api_ok: false, db_ok: false, db_type: "unknown" };
+  }
+}
+
 export interface Conversation {
   id: string;
   title: string;
@@ -263,6 +281,43 @@ export async function setDefaultDbModel(id: string): Promise<DbModel> {
   });
   if (!res.ok) throw new Error(await res.text());
   return res.json();
+}
+
+// ── System stats ──────────────────────────────────────────────────────────────
+
+export interface GpuStats {
+  name: string;
+  percent: number;
+  vram_used_gb: number;
+  vram_total_gb: number;
+}
+
+export interface OllamaModel {
+  name: string;
+  size_gb: number;
+  vram_gb: number;
+  gpu_percent: number;  // 100 = full GPU, 0 = full CPU
+  params: string;
+  quant: string;
+}
+
+export interface SystemStats {
+  cpu_percent: number;
+  ram_used_gb: number;
+  ram_total_gb: number;
+  ram_percent: number;
+  gpu: GpuStats | null;
+  ollama_models: OllamaModel[];
+}
+
+export async function getStats(): Promise<SystemStats | null> {
+  try {
+    const res = await fetch(`${BASE}/stats`, { headers: authHeaders() });
+    if (!res.ok) return null;
+    return res.json();
+  } catch {
+    return null;
+  }
 }
 
 // ── Streaming chat ────────────────────────────────────────────────────────────

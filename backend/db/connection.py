@@ -12,14 +12,16 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import urlparse
 
-DATABASE_URL: str = os.getenv("DATABASE_URL", "")
+_DATABASE_URL: str = os.getenv("DATABASE_URL", "")
 DB_PATH = Path("./localforge.db")
 
 _mysql_pool: Any = None
+_mysql_available: bool = False   # set to True only after a successful init_pool()
 
 
 def is_mysql() -> bool:
-    return DATABASE_URL.lower().startswith("mysql")
+    """True only when MySQL is configured AND the pool was successfully created."""
+    return _mysql_available
 
 
 def _parse_mysql_url(url: str) -> dict:
@@ -34,11 +36,16 @@ def _parse_mysql_url(url: str) -> dict:
 
 
 async def init_pool() -> None:
-    """Create MySQL connection pool. No-op for SQLite."""
-    global _mysql_pool
-    if is_mysql() and _mysql_pool is None:
+    """Create MySQL connection pool. Falls back to SQLite on error."""
+    global _mysql_pool, _mysql_available
+    if not _DATABASE_URL.lower().startswith("mysql"):
+        return  # SQLite mode
+    if _mysql_pool is not None:
+        return  # already initialised
+    try:
         import aiomysql
-        params = _parse_mysql_url(DATABASE_URL)
+        import logging
+        params = _parse_mysql_url(_DATABASE_URL)
         _mysql_pool = await aiomysql.create_pool(
             host=params["host"],
             port=params["port"],
@@ -51,6 +58,13 @@ async def init_pool() -> None:
             maxsize=10,
             cursorclass=aiomysql.DictCursor,
         )
+        _mysql_available = True
+        logging.info("MySQL pool ready (%s:%s/%s)", params["host"], params["port"], params["db"])
+    except Exception as exc:
+        import logging
+        logging.warning("MySQL connection failed (%s) — falling back to SQLite.", exc)
+        _mysql_pool = None
+        _mysql_available = False
 
 
 async def close_pool() -> None:
@@ -107,9 +121,7 @@ class _Wrapper:
 @asynccontextmanager
 async def get_db():
     """Async context manager — yields a unified _Wrapper for the active DB."""
-    if is_mysql():
-        if _mysql_pool is None:
-            raise RuntimeError("MySQL pool not initialised. Call init_pool() first.")
+    if _mysql_available and _mysql_pool is not None:
         async with _mysql_pool.acquire() as conn:
             async with conn.cursor() as cursor:
                 wrapper = _Wrapper("mysql", conn, cursor)
