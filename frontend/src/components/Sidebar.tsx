@@ -2,12 +2,61 @@ import { useEffect, useRef, useState } from "react";
 import { Plus, Trash2, MessageSquare, Hammer, Settings, Pencil } from "lucide-react";
 import { useChatStore } from "../store/chat";
 import { ModelSelector } from "./ModelSelector";
+import { checkAuth } from "../api/client";
+
+type ConnStatus = "checking" | "connected" | "disconnected";
+
+function useConnectionStatus() {
+  const [status, setStatus] = useState<ConnStatus>("checking");
+
+  useEffect(() => {
+    let cancelled = false;
+
+    const check = async () => {
+      if (cancelled) return;
+      setStatus("checking");
+      const ok = await checkAuth();
+      if (!cancelled) setStatus(ok ? "connected" : "disconnected");
+    };
+
+    check();
+    const id = setInterval(check, 30_000);
+    return () => { cancelled = true; clearInterval(id); };
+  }, []);
+
+  return status;
+}
+
+function StatusLed({ status }: { status: ConnStatus }) {
+  if (status === "connected") {
+    return (
+      <span className="relative flex h-2.5 w-2.5" title="Backend conectado">
+        <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-green-400 opacity-60" />
+        <span className="relative inline-flex rounded-full h-2.5 w-2.5 bg-green-500" />
+      </span>
+    );
+  }
+  if (status === "disconnected") {
+    return (
+      <span className="relative flex h-2.5 w-2.5" title="Backend desconectado">
+        <span className="relative inline-flex rounded-full h-2.5 w-2.5 bg-red-500" />
+      </span>
+    );
+  }
+  // checking
+  return (
+    <span className="relative flex h-2.5 w-2.5" title="Comprobando conexión…">
+      <span className="animate-pulse relative inline-flex rounded-full h-2.5 w-2.5 bg-yellow-400 opacity-80" />
+    </span>
+  );
+}
 
 interface SidebarProps {
   onSettings: () => void;
 }
 
 export function Sidebar({ onSettings }: SidebarProps) {
+  const connStatus = useConnectionStatus();
   const {
     conversations,
     activeConvId,
@@ -28,7 +77,10 @@ export function Sidebar({ onSettings }: SidebarProps) {
       <div className="flex items-center gap-2 px-4 py-4 border-b border-gray-200 dark:border-zinc-800">
         <Hammer size={20} className="text-indigo-500 dark:text-indigo-400" />
         <span className="font-semibold text-gray-900 dark:text-zinc-100 tracking-tight">LocalForge</span>
-        <span className="ml-auto text-xs text-gray-400 dark:text-zinc-600">v0.1</span>
+        <div className="ml-auto flex items-center gap-2">
+          <StatusLed status={connStatus} />
+          <span className="text-xs text-gray-400 dark:text-zinc-600">v0.1</span>
+        </div>
       </div>
 
       {/* Model selector */}
