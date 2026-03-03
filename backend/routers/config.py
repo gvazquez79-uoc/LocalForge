@@ -11,7 +11,7 @@ import httpx
 from fastapi import APIRouter
 from pydantic import BaseModel
 
-from backend.config import get_config, save_config, ToolsConfig, AgentConfig, TelegramConfig
+from backend.config import get_config, save_config, save_config_to_db, ToolsConfig, AgentConfig, TelegramConfig
 
 router = APIRouter(prefix="/config", tags=["config"])
 
@@ -157,7 +157,7 @@ async def update_config(body: UpdateConfigRequest):
     if body.default_model is not None:
         cfg.default_model = body.default_model
 
-    save_config(cfg)
+    await save_config_to_db(cfg)
     return {"ok": True}
 
 

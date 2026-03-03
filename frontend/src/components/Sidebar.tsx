@@ -1,22 +1,28 @@
 import { useEffect, useRef, useState } from "react";
-import { Plus, Trash2, MessageSquare, Hammer, Settings, Pencil } from "lucide-react";
+import { Plus, Trash2, MessageSquare, Hammer, Settings, Pencil, Database } from "lucide-react";
 import { useChatStore } from "../store/chat";
 import { ModelSelector } from "./ModelSelector";
-import { checkAuth } from "../api/client";
+import { StatsBar } from "./StatsBar";
+import { checkHealth } from "../api/client";
+import type { HealthStatus } from "../api/client";
 
 type ConnStatus = "checking" | "connected" | "disconnected";
 
 function useConnectionStatus() {
-  const [status, setStatus] = useState<ConnStatus>("checking");
+  const [health, setHealth] = useState<HealthStatus>({ api_ok: false, db_ok: false, db_type: "unknown" });
+  const [checking, setChecking] = useState(true);
 
   useEffect(() => {
     let cancelled = false;
 
     const check = async () => {
       if (cancelled) return;
-      setStatus("checking");
-      const ok = await checkAuth();
-      if (!cancelled) setStatus(ok ? "connected" : "disconnected");
+      setChecking(true);
+      const result = await checkHealth();
+      if (!cancelled) {
+        setHealth(result);
+        setChecking(false);
+      }
     };
 
     check();
@@ -24,13 +30,16 @@ function useConnectionStatus() {
     return () => { cancelled = true; clearInterval(id); };
   }, []);
 
-  return status;
+  const apiStatus: ConnStatus = checking ? "checking" : health.api_ok ? "connected" : "disconnected";
+  const dbStatus: ConnStatus  = checking ? "checking" : health.db_ok  ? "connected" : "disconnected";
+
+  return { apiStatus, dbStatus, dbType: health.db_type };
 }
 
-function StatusLed({ status }: { status: ConnStatus }) {
+function StatusLed({ status, title }: { status: ConnStatus; title: string }) {
   if (status === "connected") {
     return (
-      <span className="relative flex h-2.5 w-2.5" title="Backend conectado">
+      <span className="relative flex h-2.5 w-2.5" title={title}>
         <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-green-400 opacity-60" />
         <span className="relative inline-flex rounded-full h-2.5 w-2.5 bg-green-500" />
       </span>
@@ -38,12 +47,11 @@ function StatusLed({ status }: { status: ConnStatus }) {
   }
   if (status === "disconnected") {
     return (
-      <span className="relative flex h-2.5 w-2.5" title="Backend desconectado">
+      <span className="relative flex h-2.5 w-2.5" title={title}>
         <span className="relative inline-flex rounded-full h-2.5 w-2.5 bg-red-500" />
       </span>
     );
   }
-  // checking
   return (
     <span className="relative flex h-2.5 w-2.5" title="Comprobando conexión…">
       <span className="animate-pulse relative inline-flex rounded-full h-2.5 w-2.5 bg-yellow-400 opacity-80" />
@@ -56,7 +64,7 @@ interface SidebarProps {
 }
 
 export function Sidebar({ onSettings }: SidebarProps) {
-  const connStatus = useConnectionStatus();
+  const { apiStatus, dbStatus, dbType } = useConnectionStatus();
   const {
     conversations,
     activeConvId,
@@ -72,13 +80,20 @@ export function Sidebar({ onSettings }: SidebarProps) {
   }, []);
 
   return (
-    <aside className="w-64 flex-shrink-0 flex flex-col bg-gray-50 dark:bg-zinc-900 border-r border-gray-200 dark:border-zinc-800 h-full">
+    <aside className="w-100 flex-shrink-0 flex flex-col bg-gray-50 dark:bg-zinc-900 border-r border-gray-200 dark:border-zinc-800 h-full">
       {/* Logo */}
       <div className="flex items-center gap-2 px-4 py-4 border-b border-gray-200 dark:border-zinc-800">
         <Hammer size={20} className="text-indigo-500 dark:text-indigo-400" />
         <span className="font-semibold text-gray-900 dark:text-zinc-100 tracking-tight">LocalForge</span>
         <div className="ml-auto flex items-center gap-2">
-          <StatusLed status={connStatus} />
+          <StatusLed status={apiStatus} title={apiStatus === "connected" ? "API conectada" : "API desconectada"} />
+          <span className="flex items-center gap-0.5" title={`DB (${dbType}): ${dbStatus === "connected" ? "conectada" : "desconectada"}`}>
+            <Database size={10} className={
+              dbStatus === "connected"    ? "text-green-500" :
+              dbStatus === "disconnected" ? "text-red-500"   : "text-yellow-400"
+            } />
+            <StatusLed status={dbStatus} title={`DB (${dbType}): ${dbStatus === "connected" ? "conectada" : "desconectada"}`} />
+          </span>
           <span className="text-xs text-gray-400 dark:text-zinc-600">v0.1</span>
         </div>
       </div>
@@ -120,6 +135,9 @@ export function Sidebar({ onSettings }: SidebarProps) {
           ))
         )}
       </div>
+
+      {/* Resource usage */}
+      <StatsBar />
 
       {/* Settings button */}
       <div className="border-t border-gray-200 dark:border-zinc-800 px-3 py-3">
