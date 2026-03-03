@@ -15,17 +15,27 @@ from fastapi.staticfiles import StaticFiles
 # Load .env before anything else
 load_dotenv()
 
-from backend.config import load_config, get_settings
+from backend.config import load_config, get_settings, refresh_models_from_db
+from backend.db.connection import init_pool, close_pool
 from backend.db.store import init_db
 from backend.middleware.auth import api_key_middleware
 from backend.routers.chat import router as chat_router
 from backend.routers.config import router as config_router
+from backend.routers.models import router as models_router
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     load_config()
+    await init_pool()       # no-op for SQLite
     await init_db()
+
+    # Init models table and seed from localforge.json if empty
+    from backend.db.models_store import init_models_table, seed_from_config
+    from backend.config import get_config
+    await init_models_table()
+    await seed_from_config(get_config().models)
+    await refresh_models_from_db()
 
     # start_telegram_bot() is non-blocking: uses initialize/start/start_polling
     # internally and returns immediately. Do NOT wrap in create_task.
@@ -35,6 +45,7 @@ async def lifespan(app: FastAPI):
     yield
 
     await stop_telegram_bot()
+    await close_pool()      # no-op for SQLite
 
 
 app = FastAPI(
@@ -67,6 +78,7 @@ app.middleware("http")(api_key_middleware)
 
 app.include_router(chat_router, prefix="/api")
 app.include_router(config_router, prefix="/api")
+app.include_router(models_router, prefix="/api")
 
 
 @app.get("/api/health")

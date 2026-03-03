@@ -12,9 +12,17 @@ import {
   Sun,
   Moon,
   Send,
+  Cpu,
+  Edit2,
+  Star,
+  Eye,
+  EyeOff,
 } from "lucide-react";
-import { getConfig, saveConfig, restartTelegramBot } from "../api/client";
-import type { LocalForgeConfig } from "../api/client";
+import {
+  getConfig, saveConfig, restartTelegramBot,
+  listDbModels, createDbModel, updateDbModel, deleteDbModel, setDefaultDbModel,
+} from "../api/client";
+import type { LocalForgeConfig, DbModel } from "../api/client";
 import { getStoredTheme, setTheme } from "../store/theme";
 import type { Theme } from "../store/theme";
 import { usePrefs } from "../store/prefs";
@@ -33,14 +41,104 @@ export function SettingsPanel({ open, onClose }: SettingsPanelProps) {
   const [telegramStatus, setTelegramStatus] = useState<"idle" | "restarting" | "ok" | "error">("idle");
   const [tokenAlreadySet, setTokenAlreadySet] = useState(false);
   const [theme, setThemeState] = useState<Theme>(getStoredTheme);
+
+  // ── Models state ──────────────────────────────────────────────────────────
+  const [dbModels, setDbModels] = useState<DbModel[]>([]);
+  const [modelFormOpen, setModelFormOpen] = useState(false);
+  const [editingModelId, setEditingModelId] = useState<string | null>(null);
+  const [modelForm, setModelForm] = useState({ name: "", display_name: "", provider: "ollama", api_key: "", base_url: "" });
+  const [showApiKey, setShowApiKey] = useState(false);
+  const [modelSaving, setModelSaving] = useState(false);
+  const [modelError, setModelError] = useState<string | null>(null);
   const { renderMarkdown, setRenderMarkdown, showToolCalls, setShowToolCalls } = usePrefs();
   const { models } = useChatStore();
+
+  const PROVIDER_URLS: Record<string, string> = {
+    groq: "https://api.groq.com/openai/v1",
+    openai: "https://api.openai.com/v1",
+    openrouter: "https://openrouter.ai/api/v1",
+    together: "https://api.together.xyz/v1",
+    mistral: "https://api.mistral.ai/v1",
+    deepseek: "https://api.deepseek.com/v1",
+    ollama: "http://localhost:11434/v1",
+    anthropic: "",
+  };
+
+  const openModelCreate = () => {
+    setEditingModelId(null);
+    setModelForm({ name: "", display_name: "", provider: "ollama", api_key: "", base_url: "http://localhost:11434/v1" });
+    setShowApiKey(false);
+    setModelError(null);
+    setModelFormOpen(true);
+  };
+
+  const openModelEdit = (m: DbModel) => {
+    setEditingModelId(m.id);
+    setModelForm({ name: m.name, display_name: m.display_name, provider: m.provider, api_key: "", base_url: m.base_url ?? "" });
+    setShowApiKey(false);
+    setModelError(null);
+    setModelFormOpen(true);
+  };
+
+  const closeModelForm = () => { setModelFormOpen(false); setEditingModelId(null); };
+
+  const handleModelProviderChange = (provider: string) => {
+    setModelForm(f => ({ ...f, provider, base_url: PROVIDER_URLS[provider] ?? "" }));
+  };
+
+  const handleModelSave = async () => {
+    if (!modelForm.name.trim() || !modelForm.display_name.trim()) {
+      setModelError("Nombre técnico y nombre visible son obligatorios.");
+      return;
+    }
+    setModelSaving(true);
+    setModelError(null);
+    try {
+      if (editingModelId) {
+        const updated = await updateDbModel(editingModelId, {
+          name: modelForm.name,
+          display_name: modelForm.display_name,
+          provider: modelForm.provider,
+          api_key: modelForm.api_key || undefined,
+          base_url: modelForm.base_url || null,
+        });
+        setDbModels(ms => ms.map(m => m.id === editingModelId ? updated : m));
+      } else {
+        const created = await createDbModel({
+          name: modelForm.name,
+          display_name: modelForm.display_name,
+          provider: modelForm.provider,
+          api_key: modelForm.api_key || undefined,
+          base_url: modelForm.base_url || undefined,
+          is_default: dbModels.length === 0,
+        });
+        setDbModels(ms => [...ms, created]);
+      }
+      closeModelForm();
+    } catch (e) {
+      setModelError(String(e));
+    } finally {
+      setModelSaving(false);
+    }
+  };
+
+  const handleModelDelete = async (id: string) => {
+    await deleteDbModel(id);
+    setDbModels(ms => ms.filter(m => m.id !== id));
+  };
+
+  const handleSetDefault = async (id: string) => {
+    const updated = await setDefaultDbModel(id);
+    setDbModels(ms => ms.map(m => ({ ...m, is_default: m.id === id })));
+    if (updated && config) setConfig(c => c ? { ...c, default_model: updated.name } : c);
+  };
 
   useEffect(() => {
     if (open) {
       setError(null);
       setSavedOk(false);
       setTelegramStatus("idle");
+      listDbModels().then(setDbModels).catch(() => {});
       getConfig()
         .then((cfg) => {
           // If server masked the token with ***, show empty field so user knows to re-enter
@@ -178,6 +276,104 @@ export function SettingsPanel({ open, onClose }: SettingsPanelProps) {
             </div>
           ) : (
             <>
+              {/* ── Models ── */}
+              <Section icon={<Cpu size={15} />} title="Models">
+                <div className="space-y-2">
+                  {dbModels.map((m) => (
+                    <div key={m.id} className="flex items-start gap-2 bg-gray-100 dark:bg-zinc-800 rounded-lg px-3 py-2">
+                      <div className="flex-1 min-w-0">
+                        <div className="flex items-center gap-2">
+                          <span className="text-xs font-medium text-gray-800 dark:text-zinc-200 truncate">{m.display_name}</span>
+                          <span className="text-[10px] px-1.5 py-0.5 rounded bg-indigo-100 dark:bg-indigo-900/40 text-indigo-700 dark:text-indigo-300 flex-shrink-0">{m.provider}</span>
+                        </div>
+                        <p className="text-[10px] text-gray-400 dark:text-zinc-500 font-mono truncate mt-0.5">{m.name}</p>
+                      </div>
+                      <div className="flex items-center gap-1 flex-shrink-0">
+                        <button
+                          title={m.is_default ? "Default model" : "Set as default"}
+                          onClick={() => !m.is_default && handleSetDefault(m.id)}
+                          className={`p-1 rounded transition-colors ${m.is_default ? "text-amber-500" : "text-gray-300 dark:text-zinc-600 hover:text-amber-400"}`}
+                        >
+                          <Star size={12} fill={m.is_default ? "currentColor" : "none"} />
+                        </button>
+                        <button
+                          title="Edit"
+                          onClick={() => openModelEdit(m)}
+                          className="p-1 rounded text-gray-400 hover:text-indigo-500 dark:text-zinc-500 dark:hover:text-indigo-400 transition-colors"
+                        >
+                          <Edit2 size={12} />
+                        </button>
+                        <button
+                          title="Delete"
+                          onClick={() => handleModelDelete(m.id)}
+                          className="p-1 rounded text-gray-400 hover:text-red-400 dark:text-zinc-500 transition-colors"
+                        >
+                          <Trash2 size={12} />
+                        </button>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+
+                {/* Add/Edit form */}
+                {modelFormOpen ? (
+                  <div className="border border-indigo-200 dark:border-indigo-800/50 rounded-lg p-3 space-y-2.5 bg-indigo-50/50 dark:bg-indigo-950/20">
+                    <p className="text-xs font-medium text-indigo-700 dark:text-indigo-300">
+                      {editingModelId ? "Edit model" : "Add model"}
+                    </p>
+                    <FieldInput label="Technical name (e.g. llama-3.3-70b-versatile)" value={modelForm.name} onChange={v => setModelForm(f => ({ ...f, name: v }))} placeholder="model-name" mono />
+                    <FieldInput label="Display name" value={modelForm.display_name} onChange={v => setModelForm(f => ({ ...f, display_name: v }))} placeholder="Llama 3.3 70B (Groq)" />
+                    <div className="space-y-1">
+                      <label className="text-xs font-medium text-gray-500 dark:text-zinc-400">Provider</label>
+                      <select
+                        value={modelForm.provider}
+                        onChange={(e) => handleModelProviderChange(e.target.value)}
+                        className="w-full bg-white border border-gray-300 dark:bg-zinc-800 dark:border-zinc-700 rounded-lg px-3 py-1.5 text-xs text-gray-800 dark:text-zinc-200 focus:outline-none focus:border-indigo-500"
+                      >
+                        {["ollama","anthropic","groq","openai","openrouter","together","mistral","deepseek"].map(p => (
+                          <option key={p} value={p}>{p}</option>
+                        ))}
+                      </select>
+                    </div>
+                    <div className="space-y-1">
+                      <label className="text-xs font-medium text-gray-500 dark:text-zinc-400">
+                        API Key {editingModelId && <span className="text-gray-400 font-normal">(leave empty to keep current)</span>}
+                      </label>
+                      <div className="relative">
+                        <input
+                          type={showApiKey ? "text" : "password"}
+                          value={modelForm.api_key}
+                          onChange={(e) => setModelForm(f => ({ ...f, api_key: e.target.value }))}
+                          placeholder={editingModelId ? "Enter new key to change" : "sk-..."}
+                          className="w-full bg-white border border-gray-300 dark:bg-zinc-800 dark:border-zinc-700 rounded-lg px-3 py-1.5 pr-8 text-xs text-gray-800 dark:text-zinc-200 placeholder-gray-400 dark:placeholder-zinc-600 focus:outline-none focus:border-indigo-500 font-mono"
+                        />
+                        <button onClick={() => setShowApiKey(v => !v)} className="absolute right-2 top-1/2 -translate-y-1/2 text-gray-400 hover:text-gray-600 dark:text-zinc-500">
+                          {showApiKey ? <EyeOff size={12} /> : <Eye size={12} />}
+                        </button>
+                      </div>
+                    </div>
+                    <FieldInput label="Base URL (optional)" value={modelForm.base_url} onChange={v => setModelForm(f => ({ ...f, base_url: v }))} placeholder="https://api.example.com/v1" mono />
+                    {modelError && <p className="text-[10px] text-red-500">{modelError}</p>}
+                    <div className="flex gap-2 pt-1">
+                      <button onClick={handleModelSave} disabled={modelSaving} className="flex-1 py-1.5 text-xs bg-indigo-600 hover:bg-indigo-500 disabled:opacity-50 text-white rounded-lg transition-colors">
+                        {modelSaving ? "Saving…" : "Save"}
+                      </button>
+                      <button onClick={closeModelForm} className="px-3 py-1.5 text-xs text-gray-500 hover:text-gray-700 dark:text-zinc-400 transition-colors">
+                        Cancel
+                      </button>
+                    </div>
+                  </div>
+                ) : (
+                  <button
+                    onClick={openModelCreate}
+                    className="flex items-center gap-2 text-xs text-indigo-600 dark:text-indigo-400 hover:text-indigo-500 transition-colors"
+                  >
+                    <Plus size={13} />
+                    Add model
+                  </button>
+                )}
+              </Section>
+
               {/* ── Filesystem ── */}
               <Section icon={<FolderOpen size={15} />} title="Filesystem">
                 <Toggle
@@ -566,6 +762,33 @@ function PathList({
           <Plus size={14} />
         </button>
       </div>
+    </div>
+  );
+}
+
+function FieldInput({
+  label,
+  value,
+  onChange,
+  placeholder = "",
+  mono = false,
+}: {
+  label: string;
+  value: string;
+  onChange: (v: string) => void;
+  placeholder?: string;
+  mono?: boolean;
+}) {
+  return (
+    <div className="space-y-1">
+      <label className="text-xs font-medium text-gray-500 dark:text-zinc-400">{label}</label>
+      <input
+        type="text"
+        value={value}
+        onChange={(e) => onChange(e.target.value)}
+        placeholder={placeholder}
+        className={`w-full bg-white border border-gray-300 dark:bg-zinc-800 dark:border-zinc-700 rounded-lg px-3 py-1.5 text-xs text-gray-800 dark:text-zinc-200 placeholder-gray-400 dark:placeholder-zinc-600 focus:outline-none focus:border-indigo-500 ${mono ? "font-mono" : ""}`}
+      />
     </div>
   );
 }

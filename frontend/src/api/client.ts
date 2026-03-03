@@ -179,7 +179,7 @@ export async function restartTelegramBot(): Promise<{ ok: boolean; running: bool
   return res.json();
 }
 
-// ── Models ───────────────────────────────────────────────────────────────────
+// ── Models (selector) ────────────────────────────────────────────────────────
 
 export interface ModelsResponse {
   models: ModelInfo[];
@@ -188,6 +188,79 @@ export interface ModelsResponse {
 
 export async function listModels(): Promise<ModelsResponse> {
   const res = await fetch(`${BASE}/config/models`, { headers: authHeaders() });
+  if (!res.ok) throw new Error(await res.text());
+  return res.json();
+}
+
+// ── DB Models (CRUD) ──────────────────────────────────────────────────────────
+
+export interface DbModel {
+  id: string;
+  name: string;
+  display_name: string;
+  provider: string;
+  api_key_masked: string | null;
+  base_url: string | null;
+  is_default: boolean;
+}
+
+export interface DbModelCreate {
+  name: string;
+  display_name: string;
+  provider: string;
+  api_key?: string;
+  base_url?: string;
+  is_default?: boolean;
+}
+
+export interface DbModelUpdate {
+  name?: string;
+  display_name?: string;
+  provider?: string;
+  api_key?: string | null;  // null = keep, "" = clear
+  base_url?: string | null;
+  is_default?: boolean;
+}
+
+export async function listDbModels(): Promise<DbModel[]> {
+  const res = await fetch(`${BASE}/models`, { headers: authHeaders() });
+  if (!res.ok) throw new Error(await res.text());
+  return res.json();
+}
+
+export async function createDbModel(data: DbModelCreate): Promise<DbModel> {
+  const res = await fetch(`${BASE}/models`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", ...authHeaders() },
+    body: JSON.stringify(data),
+  });
+  if (!res.ok) throw new Error(await res.text());
+  return res.json();
+}
+
+export async function updateDbModel(id: string, data: DbModelUpdate): Promise<DbModel> {
+  const res = await fetch(`${BASE}/models/${id}`, {
+    method: "PUT",
+    headers: { "Content-Type": "application/json", ...authHeaders() },
+    body: JSON.stringify(data),
+  });
+  if (!res.ok) throw new Error(await res.text());
+  return res.json();
+}
+
+export async function deleteDbModel(id: string): Promise<void> {
+  const res = await fetch(`${BASE}/models/${id}`, {
+    method: "DELETE",
+    headers: authHeaders(),
+  });
+  if (!res.ok) throw new Error(await res.text());
+}
+
+export async function setDefaultDbModel(id: string): Promise<DbModel> {
+  const res = await fetch(`${BASE}/models/${id}/default`, {
+    method: "PATCH",
+    headers: authHeaders(),
+  });
   if (!res.ok) throw new Error(await res.text());
   return res.json();
 }

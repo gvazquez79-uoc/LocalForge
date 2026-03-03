@@ -17,9 +17,11 @@ from pydantic_settings import BaseSettings
 class ModelConfig(BaseModel):
     name: str
     display_name: str
-    provider: str  # "anthropic" | "ollama" | "openai"
-    api_key_env: Optional[str] = None
+    provider: str  # "anthropic" | "ollama" | "openai" | "groq" | etc.
+    api_key_env: Optional[str] = None   # env var name (backward compat)
+    api_key: Optional[str] = None       # direct key (from DB)
     base_url: Optional[str] = None
+    id: Optional[str] = None            # DB row id (None for JSON-sourced models)
 
 
 class FilesystemToolConfig(BaseModel):
@@ -78,6 +80,8 @@ class LocalForgeConfig(BaseModel):
         return None
 
     def get_model_api_key(self, model: ModelConfig) -> Optional[str]:
+        if model.api_key:
+            return model.api_key
         if model.api_key_env:
             return os.environ.get(model.api_key_env)
         return None
@@ -141,3 +145,23 @@ def save_config(config: LocalForgeConfig, path: Optional[str] = None) -> None:
         json.dump(config.model_dump(), f, indent=2)
     global _config
     _config = config
+
+
+async def refresh_models_from_db() -> None:
+    """Load models from DB and update the in-memory config.
+    Called at startup and after any model CRUD operation."""
+    global _config
+    if _config is None:
+        _config = load_config()
+    try:
+        from backend.db.models_store import list_models_db
+        db_models = await list_models_db()
+        if db_models:
+            _config.models = db_models
+            # Sync default_model with DB flag
+            for m in db_models:
+                if getattr(m, "is_default", False):
+                    _config.default_model = m.name
+                    break
+    except Exception:
+        pass  # DB not available — keep JSON models

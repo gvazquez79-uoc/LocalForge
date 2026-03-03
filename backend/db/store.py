@@ -1,50 +1,37 @@
 """
-SQLite-backed conversation store using aiosqlite.
+Conversation store — backed by SQLite or MySQL via connection.py.
 """
 from __future__ import annotations
 
 import json
 import time
 import uuid
-from pathlib import Path
 from typing import Optional
-from contextlib import asynccontextmanager
 
-import aiosqlite
-
-DB_PATH = Path("./localforge.db")
-
-
-@asynccontextmanager
-async def get_db():
-    async with aiosqlite.connect(str(DB_PATH)) as db:
-        db.row_factory = aiosqlite.Row
-        await db.execute("PRAGMA journal_mode=WAL")
-        yield db
+from backend.db.connection import get_db
 
 
 async def init_db() -> None:
     async with get_db() as db:
         await db.executescript("""
             CREATE TABLE IF NOT EXISTS conversations (
-                id TEXT PRIMARY KEY,
+                id VARCHAR(36) PRIMARY KEY,
                 title TEXT NOT NULL DEFAULT 'New conversation',
-                model TEXT NOT NULL,
+                model VARCHAR(255) NOT NULL,
                 created_at INTEGER NOT NULL,
                 updated_at INTEGER NOT NULL
             );
 
             CREATE TABLE IF NOT EXISTS messages (
-                id TEXT PRIMARY KEY,
-                conversation_id TEXT NOT NULL,
-                role TEXT NOT NULL,
+                id VARCHAR(36) PRIMARY KEY,
+                conversation_id VARCHAR(36) NOT NULL,
+                role VARCHAR(20) NOT NULL,
                 content TEXT NOT NULL,
                 metadata TEXT,
                 created_at INTEGER NOT NULL,
                 FOREIGN KEY (conversation_id) REFERENCES conversations(id) ON DELETE CASCADE
-            );
+            )
         """)
-        await db.commit()
 
 
 async def create_conversation(model: str, title: str = "New conversation") -> dict:
@@ -64,15 +51,13 @@ async def list_conversations(limit: int = 50) -> list[dict]:
         cursor = await db.execute(
             "SELECT * FROM conversations ORDER BY updated_at DESC LIMIT ?", (limit,)
         )
-        rows = await cursor.fetchall()
-        return [dict(r) for r in rows]
+        return await cursor.fetchall()
 
 
 async def get_conversation(conv_id: str) -> Optional[dict]:
     async with get_db() as db:
         cursor = await db.execute("SELECT * FROM conversations WHERE id = ?", (conv_id,))
-        row = await cursor.fetchone()
-        return dict(row) if row else None
+        return await cursor.fetchone()
 
 
 async def update_conversation_title(conv_id: str, title: str) -> None:
@@ -115,12 +100,12 @@ async def get_messages(conv_id: str) -> list[dict]:
             (conv_id,),
         )
         rows = await cursor.fetchall()
-        result = []
-        for r in rows:
-            d = dict(r)
-            try:
-                d["content"] = json.loads(d["content"])
-            except (json.JSONDecodeError, TypeError):
-                pass
-            result.append(d)
-        return result
+
+    result = []
+    for r in rows:
+        try:
+            r["content"] = json.loads(r["content"])
+        except (json.JSONDecodeError, TypeError):
+            pass
+        result.append(r)
+    return result
