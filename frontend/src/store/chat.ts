@@ -37,6 +37,7 @@ interface ChatState {
   models: ModelInfo[];
   selectedModel: string;
   isLoading: boolean;
+  modelsLoading: boolean;
   error: string | null;
   pendingConfirmation: PendingConfirmation | null;
 
@@ -62,6 +63,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
   models: [],
   selectedModel: localStorage.getItem(STORAGE_KEY) ?? "",
   isLoading: false,
+  modelsLoading: true,
   error: null,
   stopStream: null,
   pendingConfirmation: null,
@@ -72,16 +74,19 @@ export const useChatStore = create<ChatState>((set, get) => ({
   },
 
   loadModels: async () => {
+    set({ modelsLoading: true });
     try {
       const { models, default_model } = await listModels();
       const currentSelected = get().selectedModel;
-      set({ models, error: null });
-      if (!currentSelected) {
+      // Only auto-select default if nothing is stored AND there are models
+      const shouldAutoSelect = !currentSelected && models.length > 0 && default_model;
+      set({ models, error: null, modelsLoading: false });
+      if (shouldAutoSelect) {
         localStorage.setItem(STORAGE_KEY, default_model);
         set({ selectedModel: default_model });
       }
     } catch {
-      set({ error: "backend_offline" });
+      set({ error: "backend_offline", modelsLoading: false });
     }
   },
 
@@ -200,7 +205,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
         }
 
         if (event.type === "tool_confirmation_needed") {
-          const confirmation = event.data as PendingConfirmation;
+          const confirmation = event.data as unknown as PendingConfirmation;
           set({ pendingConfirmation: confirmation, isLoading: false });
           return;
         }

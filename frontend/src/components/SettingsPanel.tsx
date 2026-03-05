@@ -15,18 +15,19 @@ import {
   Cpu,
   Edit2,
   Star,
-  Eye,
-  EyeOff,
 } from "lucide-react";
 import {
   getConfig, saveConfig, restartTelegramBot,
-  listDbModels, createDbModel, updateDbModel, deleteDbModel, setDefaultDbModel,
+  listDbModels, createDbModel, updateDbModel, deleteDbModel, setDefaultDbModel, testDbModel,
+  listProviders, createProvider, updateProvider, deleteProvider,
 } from "../api/client";
-import type { LocalForgeConfig, DbModel } from "../api/client";
+import type { LocalForgeConfig, DbModel, DbProvider } from "../api/client";
 import { getStoredTheme, setTheme } from "../store/theme";
 import type { Theme } from "../store/theme";
 import { usePrefs } from "../store/prefs";
 import { useChatStore } from "../store/chat";
+import { ConfirmDialog } from "./ConfirmDialog";
+import type { ConfirmDialogOptions } from "./ConfirmDialog";
 
 interface SettingsPanelProps {
   open: boolean;
@@ -46,44 +47,143 @@ export function SettingsPanel({ open, onClose }: SettingsPanelProps) {
   const [dbModels, setDbModels] = useState<DbModel[]>([]);
   const [modelFormOpen, setModelFormOpen] = useState(false);
   const [editingModelId, setEditingModelId] = useState<string | null>(null);
-  const [modelForm, setModelForm] = useState({ name: "", display_name: "", provider: "ollama", api_key: "", base_url: "" });
-  const [showApiKey, setShowApiKey] = useState(false);
+  const [modelForm, setModelForm] = useState({ name: "", display_name: "", provider: "ollama", base_url: "" });
+  const [overrideUrl, setOverrideUrl] = useState(false);  // show base_url input even when provider has URL
   const [modelSaving, setModelSaving] = useState(false);
   const [modelError, setModelError] = useState<string | null>(null);
+  const [testingId, setTestingId] = useState<string | null>(null);
+  const [testResult, setTestResult] = useState<{ id: string; ok: boolean; msg: string } | null>(null);
   const { renderMarkdown, setRenderMarkdown, showToolCalls, setShowToolCalls } = usePrefs();
-  const { models } = useChatStore();
+  const { models, loadModels } = useChatStore();
 
-  const PROVIDER_URLS: Record<string, string> = {
-    groq: "https://api.groq.com/openai/v1",
-    openai: "https://api.openai.com/v1",
-    openrouter: "https://openrouter.ai/api/v1",
-    together: "https://api.together.xyz/v1",
-    mistral: "https://api.mistral.ai/v1",
-    deepseek: "https://api.deepseek.com/v1",
-    ollama: "http://localhost:11434/v1",
-    anthropic: "",
-  };
+  // ── Confirm dialog state ──────────────────────────────────────────────────
+  const [confirmDialog, setConfirmDialog] = useState<(ConfirmDialogOptions & { onConfirm: () => void }) | null>(null);
+
+  const openConfirm = (opts: ConfirmDialogOptions, onConfirm: () => void) =>
+    setConfirmDialog({ ...opts, onConfirm });
+  const closeConfirm = () => setConfirmDialog(null);
+
+  // ── Providers state ───────────────────────────────────────────────────────
+  const [providers, setProviders] = useState<DbProvider[]>([]);
+  const [providerFormOpen, setProviderFormOpen] = useState(false);
+  const [editingProviderId, setEditingProviderId] = useState<string | null>(null);
+  const [providerForm, setProviderForm] = useState({ name: "", display_name: "", base_url: "", api_key_env: "" });
+  const [providerSaving, setProviderSaving] = useState(false);
+  const [providerError, setProviderError] = useState<string | null>(null);
+
+  // Build base_url lookup from loaded providers
+  const providerUrlMap: Record<string, string> = Object.fromEntries(
+    providers.map(p => [p.name, p.base_url])
+  );
 
   const openModelCreate = () => {
     setEditingModelId(null);
-    setModelForm({ name: "", display_name: "", provider: "ollama", api_key: "", base_url: "http://localhost:11434/v1" });
-    setShowApiKey(false);
+    const defaultProvider = providers[0]?.name ?? "ollama";
+    setModelForm({ name: "", display_name: "", provider: defaultProvider, base_url: "" });
+    setOverrideUrl(false);
     setModelError(null);
     setModelFormOpen(true);
   };
 
   const openModelEdit = (m: DbModel) => {
     setEditingModelId(m.id);
-    setModelForm({ name: m.name, display_name: m.display_name, provider: m.provider, api_key: "", base_url: m.base_url ?? "" });
-    setShowApiKey(false);
+    const modelBaseUrl = m.base_url ?? "";
+    const providerDefaultUrl = providerUrlMap[m.provider] ?? "";
+    // Only show override if model has a URL that differs from its provider's URL
+    const hasCustomUrl = !!modelBaseUrl && modelBaseUrl !== providerDefaultUrl;
+    setModelForm({ name: m.name, display_name: m.display_name, provider: m.provider, base_url: hasCustomUrl ? modelBaseUrl : "" });
+    setOverrideUrl(hasCustomUrl);
     setModelError(null);
     setModelFormOpen(true);
   };
 
-  const closeModelForm = () => { setModelFormOpen(false); setEditingModelId(null); };
+  const closeModelForm = () => { setModelFormOpen(false); setEditingModelId(null); setOverrideUrl(false); setTestResult(null); };
+
+  const handleTestModel = async (id: string) => {
+    setTestingId(id);
+    setTestResult(null);
+    try {
+      const res = await testDbModel(id);
+      setTestResult({ id, ok: res.ok, msg: res.ok ? (res.response ?? "OK") : (res.error ?? "Error") });
+    } catch (e) {
+      setTestResult({ id, ok: false, msg: String(e) });
+    } finally {
+      setTestingId(null);
+    }
+  };
 
   const handleModelProviderChange = (provider: string) => {
-    setModelForm(f => ({ ...f, provider, base_url: PROVIDER_URLS[provider] ?? "" }));
+    // When provider changes, reset any URL override — the new provider's URL will be inherited
+    setModelForm(f => ({ ...f, provider, base_url: "" }));
+    setOverrideUrl(false);
+  };
+
+  // ── Provider handlers ────────────────────────────────────────────────────
+  const openProviderCreate = () => {
+    setEditingProviderId(null);
+    setProviderForm({ name: "", display_name: "", base_url: "", api_key_env: "" });
+    setProviderError(null);
+    setProviderFormOpen(true);
+  };
+
+  const openProviderEdit = (p: DbProvider) => {
+    setEditingProviderId(p.id);
+    setProviderForm({ name: p.name, display_name: p.display_name, base_url: p.base_url, api_key_env: p.api_key_env });
+    setProviderError(null);
+    setProviderFormOpen(true);
+  };
+
+  const closeProviderForm = () => { setProviderFormOpen(false); setEditingProviderId(null); };
+
+  const handleProviderSave = async () => {
+    if (!providerForm.name.trim() || !providerForm.display_name.trim()) {
+      setProviderError("Name and display name are required.");
+      return;
+    }
+    setProviderSaving(true);
+    setProviderError(null);
+    try {
+      if (editingProviderId) {
+        const updated = await updateProvider(editingProviderId, {
+          name: providerForm.name,
+          display_name: providerForm.display_name,
+          base_url: providerForm.base_url,
+          api_key_env: providerForm.api_key_env,
+        });
+        setProviders(ps => ps.map(p => p.id === editingProviderId ? updated : p));
+      } else {
+        const created = await createProvider({
+          name: providerForm.name,
+          display_name: providerForm.display_name,
+          base_url: providerForm.base_url,
+          api_key_env: providerForm.api_key_env,
+        });
+        setProviders(ps => [...ps, created]);
+      }
+      closeProviderForm();
+    } catch (e) {
+      setProviderError(String(e));
+    } finally {
+      setProviderSaving(false);
+    }
+  };
+
+  const handleProviderDelete = (id: string) => {
+    const prov = providers.find(p => p.id === id);
+    openConfirm(
+      {
+        title: "Delete provider",
+        message: "This provider will be permanently removed. Models that use it may stop working.",
+        detail: prov ? `${prov.display_name} (${prov.name})` : id,
+        confirmLabel: "Delete",
+        variant: "danger",
+      },
+      async () => {
+        closeConfirm();
+        await deleteProvider(id);
+        setProviders(ps => ps.filter(p => p.id !== id));
+      },
+    );
   };
 
   const handleModelSave = async () => {
@@ -93,14 +193,15 @@ export function SettingsPanel({ open, onClose }: SettingsPanelProps) {
     }
     setModelSaving(true);
     setModelError(null);
+    // Only persist base_url if user explicitly overrode it; otherwise null = inherit from provider
+    const effectiveBaseUrl = overrideUrl && modelForm.base_url ? modelForm.base_url : null;
     try {
       if (editingModelId) {
         const updated = await updateDbModel(editingModelId, {
           name: modelForm.name,
           display_name: modelForm.display_name,
           provider: modelForm.provider,
-          api_key: modelForm.api_key || undefined,
-          base_url: modelForm.base_url || null,
+          base_url: effectiveBaseUrl,
         });
         setDbModels(ms => ms.map(m => m.id === editingModelId ? updated : m));
       } else {
@@ -108,29 +209,47 @@ export function SettingsPanel({ open, onClose }: SettingsPanelProps) {
           name: modelForm.name,
           display_name: modelForm.display_name,
           provider: modelForm.provider,
-          api_key: modelForm.api_key || undefined,
-          base_url: modelForm.base_url || undefined,
+          base_url: effectiveBaseUrl ?? undefined,
           is_default: dbModels.length === 0,
         });
         setDbModels(ms => [...ms, created]);
       }
       closeModelForm();
+      void loadModels(); // refresh ModelSelector dropdown
     } catch (e) {
-      setModelError(String(e));
+      // Extract the "detail" field from FastAPI JSON error responses
+      const raw = String(e);
+      const m = raw.match(/"detail"\s*:\s*"([^"]+)"/);
+      setModelError(m ? m[1] : raw.replace(/^Error:\s*/, ""));
     } finally {
       setModelSaving(false);
     }
   };
 
-  const handleModelDelete = async (id: string) => {
-    await deleteDbModel(id);
-    setDbModels(ms => ms.filter(m => m.id !== id));
+  const handleModelDelete = (id: string) => {
+    const model = dbModels.find(m => m.id === id);
+    openConfirm(
+      {
+        title: "Delete model",
+        message: "This model will be permanently removed from the database.",
+        detail: model ? `${model.display_name} · ${model.provider}` : id,
+        confirmLabel: "Delete",
+        variant: "danger",
+      },
+      async () => {
+        closeConfirm();
+        await deleteDbModel(id);
+        setDbModels(ms => ms.filter(m => m.id !== id));
+        void loadModels(); // refresh ModelSelector dropdown
+      },
+    );
   };
 
   const handleSetDefault = async (id: string) => {
     const updated = await setDefaultDbModel(id);
     setDbModels(ms => ms.map(m => ({ ...m, is_default: m.id === id })));
     if (updated && config) setConfig(c => c ? { ...c, default_model: updated.name } : c);
+    void loadModels(); // refresh ModelSelector dropdown
   };
 
   useEffect(() => {
@@ -138,6 +257,7 @@ export function SettingsPanel({ open, onClose }: SettingsPanelProps) {
       setError(null);
       setSavedOk(false);
       setTelegramStatus("idle");
+      listProviders().then(setProviders).catch(() => {});
       listDbModels().then(setDbModels).catch(() => {});
       getConfig()
         .then((cfg) => {
@@ -193,13 +313,15 @@ export function SettingsPanel({ open, onClose }: SettingsPanelProps) {
       setSavedOk(true);
       setTimeout(() => setSavedOk(false), 3000);
 
-      // Auto-restart Telegram bot so changes take effect immediately
-      setTelegramStatus("restarting");
-      try {
-        const result = await restartTelegramBot();
-        setTelegramStatus(result.running ? "ok" : "idle");
-      } catch {
-        setTelegramStatus("error");
+      // Auto-restart Telegram bot only when it is enabled (no point restarting a disabled bot)
+      if (config.telegram.enabled) {
+        setTelegramStatus("restarting");
+        try {
+          const result = await restartTelegramBot();
+          setTelegramStatus(result.running ? "ok" : "idle");
+        } catch {
+          setTelegramStatus("error");
+        }
       }
     } catch (e) {
       setError(String(e));
@@ -280,37 +402,54 @@ export function SettingsPanel({ open, onClose }: SettingsPanelProps) {
               <Section icon={<Cpu size={15} />} title="Models">
                 <div className="space-y-2">
                   {dbModels.map((m) => (
-                    <div key={m.id} className="flex items-start gap-2 bg-gray-100 dark:bg-zinc-800 rounded-lg px-3 py-2">
-                      <div className="flex-1 min-w-0">
-                        <div className="flex items-center gap-2">
-                          <span className="text-xs font-medium text-gray-800 dark:text-zinc-200 truncate">{m.display_name}</span>
-                          <span className="text-[10px] px-1.5 py-0.5 rounded bg-indigo-100 dark:bg-indigo-900/40 text-indigo-700 dark:text-indigo-300 flex-shrink-0">{m.provider}</span>
+                    <div key={m.id}>
+                      <div className="flex items-start gap-2 bg-gray-100 dark:bg-zinc-800 rounded-lg px-3 py-2">
+                        <div className="flex-1 min-w-0">
+                          <div className="flex items-center gap-2">
+                            <span className="text-xs font-medium text-gray-800 dark:text-zinc-200 truncate">{m.display_name}</span>
+                            <span className="text-[10px] px-1.5 py-0.5 rounded bg-indigo-100 dark:bg-indigo-900/40 text-indigo-700 dark:text-indigo-300 flex-shrink-0">{m.provider}</span>
+                          </div>
+                          <p className="text-[10px] text-gray-400 dark:text-zinc-500 font-mono truncate mt-0.5">{m.name}</p>
                         </div>
-                        <p className="text-[10px] text-gray-400 dark:text-zinc-500 font-mono truncate mt-0.5">{m.name}</p>
+                        <div className="flex items-center gap-1 flex-shrink-0">
+                          <button
+                            title="Test connection"
+                            onClick={() => handleTestModel(m.id)}
+                            disabled={testingId === m.id}
+                            className="p-1 rounded text-gray-400 hover:text-green-500 dark:text-zinc-500 dark:hover:text-green-400 transition-colors disabled:opacity-40"
+                          >
+                            {testingId === m.id
+                              ? <span className="inline-block w-3 h-3 border-2 border-green-400 border-t-transparent rounded-full animate-spin" />
+                              : <Send size={12} />}
+                          </button>
+                          <button
+                            title={m.is_default ? "Default model" : "Set as default"}
+                            onClick={() => !m.is_default && handleSetDefault(m.id)}
+                            className={`p-1 rounded transition-colors ${m.is_default ? "text-amber-500" : "text-gray-300 dark:text-zinc-600 hover:text-amber-400"}`}
+                          >
+                            <Star size={12} fill={m.is_default ? "currentColor" : "none"} />
+                          </button>
+                          <button
+                            title="Edit"
+                            onClick={() => openModelEdit(m)}
+                            className="p-1 rounded text-gray-400 hover:text-indigo-500 dark:text-zinc-500 dark:hover:text-indigo-400 transition-colors"
+                          >
+                            <Edit2 size={12} />
+                          </button>
+                          <button
+                            title="Delete"
+                            onClick={() => handleModelDelete(m.id)}
+                            className="p-1 rounded text-gray-400 hover:text-red-400 dark:text-zinc-500 transition-colors"
+                          >
+                            <Trash2 size={12} />
+                          </button>
+                        </div>
                       </div>
-                      <div className="flex items-center gap-1 flex-shrink-0">
-                        <button
-                          title={m.is_default ? "Default model" : "Set as default"}
-                          onClick={() => !m.is_default && handleSetDefault(m.id)}
-                          className={`p-1 rounded transition-colors ${m.is_default ? "text-amber-500" : "text-gray-300 dark:text-zinc-600 hover:text-amber-400"}`}
-                        >
-                          <Star size={12} fill={m.is_default ? "currentColor" : "none"} />
-                        </button>
-                        <button
-                          title="Edit"
-                          onClick={() => openModelEdit(m)}
-                          className="p-1 rounded text-gray-400 hover:text-indigo-500 dark:text-zinc-500 dark:hover:text-indigo-400 transition-colors"
-                        >
-                          <Edit2 size={12} />
-                        </button>
-                        <button
-                          title="Delete"
-                          onClick={() => handleModelDelete(m.id)}
-                          className="p-1 rounded text-gray-400 hover:text-red-400 dark:text-zinc-500 transition-colors"
-                        >
-                          <Trash2 size={12} />
-                        </button>
-                      </div>
+                      {testResult?.id === m.id && (
+                        <p className={`text-[10px] mt-1 px-1 ${testResult.ok ? "text-green-500" : "text-red-500"}`}>
+                          {testResult.ok ? "✓ " : "✗ "}{testResult.msg}
+                        </p>
+                      )}
                     </div>
                   ))}
                 </div>
@@ -330,29 +469,60 @@ export function SettingsPanel({ open, onClose }: SettingsPanelProps) {
                         onChange={(e) => handleModelProviderChange(e.target.value)}
                         className="w-full bg-white border border-gray-300 dark:bg-zinc-800 dark:border-zinc-700 rounded-lg px-3 py-1.5 text-xs text-gray-800 dark:text-zinc-200 focus:outline-none focus:border-indigo-500"
                       >
-                        {["ollama","anthropic","groq","openai","openrouter","together","mistral","deepseek"].map(p => (
-                          <option key={p} value={p}>{p}</option>
+                        {providers.map(p => (
+                          <option key={p.name} value={p.name}>{p.display_name}</option>
                         ))}
+                        {/* Allow typing a custom provider not yet in DB */}
+                        {modelForm.provider && !providers.find(p => p.name === modelForm.provider) && (
+                          <option value={modelForm.provider}>{modelForm.provider} (custom)</option>
+                        )}
                       </select>
                     </div>
-                    <div className="space-y-1">
-                      <label className="text-xs font-medium text-gray-500 dark:text-zinc-400">
-                        API Key {editingModelId && <span className="text-gray-400 font-normal">(leave empty to keep current)</span>}
-                      </label>
-                      <div className="relative">
-                        <input
-                          type={showApiKey ? "text" : "password"}
-                          value={modelForm.api_key}
-                          onChange={(e) => setModelForm(f => ({ ...f, api_key: e.target.value }))}
-                          placeholder={editingModelId ? "Enter new key to change" : "sk-..."}
-                          className="w-full bg-white border border-gray-300 dark:bg-zinc-800 dark:border-zinc-700 rounded-lg px-3 py-1.5 pr-8 text-xs text-gray-800 dark:text-zinc-200 placeholder-gray-400 dark:placeholder-zinc-600 focus:outline-none focus:border-indigo-500 font-mono"
-                        />
-                        <button onClick={() => setShowApiKey(v => !v)} className="absolute right-2 top-1/2 -translate-y-1/2 text-gray-400 hover:text-gray-600 dark:text-zinc-500">
-                          {showApiKey ? <EyeOff size={12} /> : <Eye size={12} />}
-                        </button>
-                      </div>
-                    </div>
-                    <FieldInput label="Base URL (optional)" value={modelForm.base_url} onChange={v => setModelForm(f => ({ ...f, base_url: v }))} placeholder="https://api.example.com/v1" mono />
+                    {/* Base URL — inherited from provider unless overridden */}
+                    {(() => {
+                      const providerUrl = providerUrlMap[modelForm.provider] ?? "";
+                      if (providerUrl && !overrideUrl) {
+                        return (
+                          <div className="space-y-1">
+                            <label className="text-xs font-medium text-gray-500 dark:text-zinc-400">Base URL</label>
+                            <div className="flex items-center gap-2 px-3 py-1.5 bg-gray-50 dark:bg-zinc-900 border border-gray-200 dark:border-zinc-700 rounded-lg">
+                              <span className="flex-1 text-[10px] font-mono text-gray-400 dark:text-zinc-500 truncate">{providerUrl}</span>
+                              <span className="text-[9px] text-gray-400 dark:text-zinc-600 flex-shrink-0">del provider</span>
+                              <button
+                                type="button"
+                                onClick={() => { setOverrideUrl(true); setModelForm(f => ({ ...f, base_url: providerUrl })); }}
+                                className="text-[10px] text-indigo-500 hover:text-indigo-600 dark:text-indigo-400 flex-shrink-0 transition-colors"
+                              >
+                                Cambiar
+                              </button>
+                            </div>
+                          </div>
+                        );
+                      }
+                      return (
+                        <div className="space-y-1">
+                          <div className="flex items-center justify-between">
+                            <label className="text-xs font-medium text-gray-500 dark:text-zinc-400">Base URL</label>
+                            {providerUrl && overrideUrl && (
+                              <button
+                                type="button"
+                                onClick={() => { setOverrideUrl(false); setModelForm(f => ({ ...f, base_url: "" })); }}
+                                className="text-[10px] text-gray-400 hover:text-gray-600 dark:text-zinc-500 transition-colors"
+                              >
+                                ← usar URL del provider
+                              </button>
+                            )}
+                          </div>
+                          <input
+                            type="text"
+                            value={modelForm.base_url}
+                            onChange={(e) => setModelForm(f => ({ ...f, base_url: e.target.value }))}
+                            placeholder={providerUrl || "https://api.example.com/v1"}
+                            className="w-full bg-white border border-gray-300 dark:bg-zinc-800 dark:border-zinc-700 rounded-lg px-3 py-1.5 text-xs text-gray-800 dark:text-zinc-200 placeholder-gray-400 dark:placeholder-zinc-600 focus:outline-none focus:border-indigo-500 font-mono"
+                          />
+                        </div>
+                      );
+                    })()}
                     {modelError && <p className="text-[10px] text-red-500">{modelError}</p>}
                     <div className="flex gap-2 pt-1">
                       <button onClick={handleModelSave} disabled={modelSaving} className="flex-1 py-1.5 text-xs bg-indigo-600 hover:bg-indigo-500 disabled:opacity-50 text-white rounded-lg transition-colors">
@@ -370,6 +540,78 @@ export function SettingsPanel({ open, onClose }: SettingsPanelProps) {
                   >
                     <Plus size={13} />
                     Add model
+                  </button>
+                )}
+              </Section>
+
+              {/* ── Providers ── */}
+              <Section icon={<Globe size={15} />} title="Providers">
+                <div className="space-y-2">
+                  {providers.map((p) => (
+                    <div key={p.id} className="flex items-start gap-2 bg-gray-100 dark:bg-zinc-800 rounded-lg px-3 py-2">
+                      <div className="flex-1 min-w-0">
+                        <div className="flex items-center gap-2 flex-wrap">
+                          <span className="text-xs font-medium text-gray-800 dark:text-zinc-200">{p.display_name}</span>
+                          <span className="text-[10px] font-mono text-gray-500 dark:text-zinc-400">{p.name}</span>
+                          {p.is_builtin && (
+                            <span className="text-[9px] px-1 rounded bg-gray-200 dark:bg-zinc-700 text-gray-500 dark:text-zinc-400">builtin</span>
+                          )}
+                        </div>
+                        {p.base_url && (
+                          <p className="text-[10px] text-gray-400 dark:text-zinc-500 font-mono truncate mt-0.5">{p.base_url}</p>
+                        )}
+                        {p.api_key_env && (
+                          <p className="text-[10px] text-indigo-400 dark:text-indigo-500 mt-0.5">env: {p.api_key_env}</p>
+                        )}
+                      </div>
+                      <div className="flex items-center gap-1 flex-shrink-0">
+                        <button
+                          title="Edit"
+                          onClick={() => openProviderEdit(p)}
+                          className="p-1 rounded text-gray-400 hover:text-indigo-500 dark:text-zinc-500 dark:hover:text-indigo-400 transition-colors"
+                        >
+                          <Edit2 size={12} />
+                        </button>
+                        {!p.is_builtin && (
+                          <button
+                            title="Delete"
+                            onClick={() => handleProviderDelete(p.id)}
+                            className="p-1 rounded text-gray-400 hover:text-red-400 dark:text-zinc-500 transition-colors"
+                          >
+                            <Trash2 size={12} />
+                          </button>
+                        )}
+                      </div>
+                    </div>
+                  ))}
+                </div>
+
+                {providerFormOpen ? (
+                  <div className="border border-indigo-200 dark:border-indigo-800/50 rounded-lg p-3 space-y-2.5 bg-indigo-50/50 dark:bg-indigo-950/20">
+                    <p className="text-xs font-medium text-indigo-700 dark:text-indigo-300">
+                      {editingProviderId ? "Edit provider" : "Add provider"}
+                    </p>
+                    <FieldInput label="Slug (e.g. myapi)" value={providerForm.name} onChange={v => setProviderForm(f => ({ ...f, name: v }))} placeholder="my-provider" mono />
+                    <FieldInput label="Display name" value={providerForm.display_name} onChange={v => setProviderForm(f => ({ ...f, display_name: v }))} placeholder="My Provider" />
+                    <FieldInput label="Base URL" value={providerForm.base_url} onChange={v => setProviderForm(f => ({ ...f, base_url: v }))} placeholder="https://api.example.com/v1" mono />
+                    <FieldInput label="API key env var (optional)" value={providerForm.api_key_env} onChange={v => setProviderForm(f => ({ ...f, api_key_env: v }))} placeholder="MY_PROVIDER_API_KEY" mono />
+                    {providerError && <p className="text-[10px] text-red-500">{providerError}</p>}
+                    <div className="flex gap-2 pt-1">
+                      <button onClick={handleProviderSave} disabled={providerSaving} className="flex-1 py-1.5 text-xs bg-indigo-600 hover:bg-indigo-500 disabled:opacity-50 text-white rounded-lg transition-colors">
+                        {providerSaving ? "Saving…" : "Save"}
+                      </button>
+                      <button onClick={closeProviderForm} className="px-3 py-1.5 text-xs text-gray-500 hover:text-gray-700 dark:text-zinc-400 transition-colors">
+                        Cancel
+                      </button>
+                    </div>
+                  </div>
+                ) : (
+                  <button
+                    onClick={openProviderCreate}
+                    className="flex items-center gap-2 text-xs text-indigo-600 dark:text-indigo-400 hover:text-indigo-500 transition-colors"
+                  >
+                    <Plus size={13} />
+                    Add provider
                   </button>
                 )}
               </Section>
@@ -602,6 +844,19 @@ export function SettingsPanel({ open, onClose }: SettingsPanelProps) {
           </button>
         </div>
       </div>
+
+      {/* Global confirm dialog (model/provider delete, etc.) */}
+      <ConfirmDialog
+        open={confirmDialog !== null}
+        title={confirmDialog?.title ?? ""}
+        message={confirmDialog?.message ?? ""}
+        detail={confirmDialog?.detail}
+        confirmLabel={confirmDialog?.confirmLabel}
+        cancelLabel={confirmDialog?.cancelLabel}
+        variant={confirmDialog?.variant}
+        onConfirm={() => confirmDialog?.onConfirm()}
+        onCancel={closeConfirm}
+      />
     </>
   );
 }

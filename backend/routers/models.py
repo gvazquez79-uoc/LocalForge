@@ -46,14 +46,17 @@ async def api_list_models():
 
 @router.post("/models", status_code=201)
 async def api_create_model(body: ModelCreate):
-    model = await create_model(
-        name=body.name,
-        display_name=body.display_name,
-        provider=body.provider,
-        api_key=body.api_key,
-        base_url=body.base_url,
-        is_default=body.is_default,
-    )
+    try:
+        model = await create_model(
+            name=body.name,
+            display_name=body.display_name,
+            provider=body.provider,
+            api_key=body.api_key,
+            base_url=body.base_url,
+            is_default=body.is_default,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc))
     await refresh_models_from_db()
     return model
 
@@ -91,3 +94,33 @@ async def api_set_default(model_id: str):
         raise HTTPException(status_code=404, detail="Model not found")
     await refresh_models_from_db()
     return model
+
+
+@router.post("/models/{model_id}/test")
+async def api_test_model(model_id: str):
+    """Send a minimal request to verify the model is reachable and the API key works."""
+    row = await get_model_by_id(model_id)
+    if row is None:
+        raise HTTPException(status_code=404, detail="Model not found")
+
+    from backend.config import get_config
+    from backend.models.registry import get_adapter
+
+    cfg = get_config()
+    try:
+        adapter = get_adapter(row["name"], cfg)
+        response = ""
+        async for event in adapter.stream_chat(
+            messages=[{"role": "user", "content": "Reply with just the word OK."}],
+            tools=[],
+            system="You are a test assistant. Reply with a single word: OK.",
+        ):
+            if event.type == "text_delta":
+                response += event.data.get("text", "")
+            elif event.type == "error":
+                return {"ok": False, "error": event.data.get("message", "Unknown error")}
+            elif event.type == "done":
+                break
+        return {"ok": True, "response": response.strip()[:200]}
+    except Exception as exc:
+        return {"ok": False, "error": str(exc)}

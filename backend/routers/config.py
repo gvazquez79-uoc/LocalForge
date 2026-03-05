@@ -164,8 +164,10 @@ async def update_config(body: UpdateConfigRequest):
 @router.post("/telegram/restart")
 async def restart_telegram():
     """Stop and restart the Telegram bot with the current config (no backend restart needed)."""
+    import asyncio
     from backend.telegram.bot import stop_telegram_bot, start_telegram_bot
     await stop_telegram_bot()
+    await asyncio.sleep(1)   # give Telegram servers time to release the connection
     await start_telegram_bot()
     cfg = get_config()
     return {"ok": True, "running": cfg.telegram.enabled and bool(cfg.telegram.bot_token)}

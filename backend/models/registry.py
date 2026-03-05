@@ -17,7 +17,9 @@ from __future__ import annotations
 from backend.config import LocalForgeConfig, get_config
 from backend.models.base import BaseModelAdapter
 
-# Well-known base URLs for providers that don't require base_url in config
+# Well-known base URLs for providers that don't require base_url in config.
+# Populated from DB at startup via config.refresh_providers_cache();
+# these are the defaults used before the DB is available.
 _PROVIDER_DEFAULTS: dict[str, str] = {
     "openai":      "https://api.openai.com/v1",
     "groq":        "https://api.groq.com/openai/v1",
@@ -25,7 +27,14 @@ _PROVIDER_DEFAULTS: dict[str, str] = {
     "together":    "https://api.together.xyz/v1",
     "mistral":     "https://api.mistral.ai/v1",
     "deepseek":    "https://api.deepseek.com/v1",
+    "ollama":      "http://localhost:11434/v1",
 }
+
+
+def update_provider_defaults(defaults: dict[str, str]) -> None:
+    """Called by config.refresh_providers_cache() to sync DB provider URLs."""
+    global _PROVIDER_DEFAULTS
+    _PROVIDER_DEFAULTS = defaults
 
 
 def _get_ollama_base_url(cfg: LocalForgeConfig) -> str:

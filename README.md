@@ -1,208 +1,344 @@
-# LocalForge
+# 🔨 LocalForge
 
-Local AI agent with filesystem, terminal, and web search access.
-Multi-model: Claude, Ollama, OpenAI-compatible. Includes Telegram bot integration.
+Local AI agent system with filesystem, terminal and web search access.
+Multi-model support via a unified OpenAI-compatible layer — works with Ollama, Anthropic, Groq, OpenRouter, OpenAI, Mistral, DeepSeek, Together AI and any custom provider.
+
+---
 
 ## Features
 
-- **Multi-model** — Claude (Anthropic), Ollama (local), Groq, OpenRouter, Together, Mistral, DeepSeek, any OpenAI-compatible API
+- **Multi-model** — switch between models from any provider in a single dropdown; Ollama models auto-discovered
+- **Agent loop** — multi-turn reasoning with tool use (filesystem, terminal, web search)
+- **Tool confirmations** — sensitive actions (write/delete files, run commands) require explicit approval in the UI
 - **Image & PDF attachments** — drag & drop or paste images and PDFs; the agent reads and analyzes them
-- **Filesystem tools** — read, write, list, search files within allowed paths
-- **Terminal** — run shell commands with optional confirmation
-- **Web search** — DuckDuckGo, no API key required
-- **Streaming** — real-time SSE response with tool call visualization
-- **Conversation history** — SQLite persistence, inline rename, sidebar navigation
+- **Persistent chat history** — conversations stored in SQLite (default) or MySQL
 - **Persistent memory** — the agent remembers things across conversations via `~/.localforge_memory.md`
+- **Telegram bot** — full agent access from Telegram (same tools, same models), configurable from Settings
+- **Developer mode** — live log viewer at `/logs` with level filtering, search and SSE stream
+- **Dark / light theme** — persisted per user
 - **API key auth** — optional password protection for server deployments
-- **Telegram bot** — use the agent from Telegram, configurable from the Settings panel
-- **Settings panel** — configure tools, paths, agent prompt, and display preferences
-- **Themes** — light / dark mode
-- **Server deployment** — nginx + systemd scripts included, see [DEPLOY.md](DEPLOY.md)
+- **Hallucination detection** — catches models that claim to use tools without actually calling them
 
-## Quick Start
+---
 
-### 1. Configure
+## Stack
 
-```bash
-# Copy config templates
-cp localforge.example.json localforge.json
-cp .env.example .env
+| Layer | Technology |
+|---|---|
+| Backend | Python 3.13 · FastAPI · aiosqlite / aiomysql |
+| Frontend | React · Vite · TypeScript · Tailwind CSS v3 · Zustand · lucide-react |
+| Agent | Anthropic SDK · OpenAI-compatible SDK |
+| Bot | python-telegram-bot v20+ |
 
-# Edit .env and add your API keys (e.g. ANTHROPIC_API_KEY)
-# Edit localforge.json to set your default model and allowed paths
+---
+
+## Project structure
+
+```
+LocalForge/
+├── backend/
+│   ├── main.py                  # FastAPI app, lifespan startup
+│   ├── config.py                # Pydantic config, DB sync helpers
+│   ├── logging_setup.py         # In-memory log ring-buffer + custom handler
+│   ├── agent/
+│   │   └── loop.py              # Multi-turn agent loop with SSE streaming
+│   ├── models/
+│   │   ├── base.py
+│   │   ├── anthropic.py
+│   │   ├── openai_compat.py
+│   │   └── registry.py          # Provider → adapter resolution
+│   ├── tools/
+│   │   ├── base.py
+│   │   ├── filesystem.py
+│   │   ├── terminal.py
+│   │   └── web_search.py
+│   ├── routers/
+│   │   ├── chat.py
+│   │   ├── config.py
+│   │   ├── models.py
+│   │   ├── providers.py
+│   │   ├── stats.py
+│   │   └── logs.py              # GET /api/logs · SSE /api/logs/stream
+│   ├── db/
+│   │   ├── connection.py        # SQLite/MySQL abstraction (_Wrapper)
+│   │   ├── store.py             # Conversation persistence
+│   │   ├── models_store.py      # Model CRUD
+│   │   ├── providers_store.py   # Provider CRUD + builtin seeding
+│   │   └── settings_store.py    # App config stored as JSON blob
+│   ├── middleware/
+│   │   └── auth.py              # API key auth (headers + ?api_key= for SSE)
+│   └── telegram/
+│       └── bot.py               # Telegram bot (non-blocking, dynamic restart)
+├── frontend/src/
+│   ├── api/client.ts            # fetch + SSE client
+│   ├── store/
+│   │   ├── chat.ts              # Zustand chat state
+│   │   ├── prefs.ts             # UI preferences (theme, devMode, markdown…)
+│   │   └── theme.ts
+│   └── components/
+│       ├── App.tsx
+│       ├── Sidebar.tsx          # Nav, model selector, dev mode toggle
+│       ├── ChatWindow.tsx
+│       ├── Message.tsx
+│       ├── ToolBlock.tsx
+│       ├── ModelSelector.tsx
+│       ├── SettingsPanel.tsx    # Full settings UI (config, models, providers)
+│       ├── StatsBar.tsx         # CPU / RAM / GPU stats
+│       ├── ConfirmationModal.tsx # Agent tool approval dialog
+│       ├── ConfirmDialog.tsx     # Generic reusable confirm dialog
+│       └── LogsPage.tsx         # Developer log viewer (route /logs)
+├── localforge.json              # Seed config (DB is source of truth after first boot)
+├── .env                         # Secrets and runtime config — never commit
+└── start.bat                    # Windows one-click startup
 ```
 
-### 2. Install dependencies
+---
+
+## Quick start
+
+### 1. Install dependencies
 
 ```bash
 # Python backend
-py -3 -m pip install -e .
+py -3 -m pip install fastapi uvicorn anthropic openai duckduckgo-search aiosqlite aiomysql pydantic-settings python-dotenv python-telegram-bot pypdf
 
 # Frontend
 cd frontend && npm install
 ```
 
+### 2. Configure
+
+Create `.env` in the project root:
+
+```env
+# Optional — leave empty to disable auth (open dev mode)
+API_KEY=your-secret-key
+
+# Optional — use MySQL instead of SQLite
+# DATABASE_URL=mysql://user:pass@localhost:3306/localforge
+
+# Optional — override bind host/port
+# LOCALFORGE_HOST=127.0.0.1
+# LOCALFORGE_PORT=8000
+```
+
+Provider API keys (Anthropic, Groq, OpenRouter…) are configured in **Settings → Providers** and stored in the database. Alternatively set them as environment variables (`ANTHROPIC_API_KEY`, `GROQ_API_KEY`, etc.) and reference them in the provider's `api_key_env` field.
+
 ### 3. Run
 
-```bash
-# Windows — double-click:
-start.bat
+**Windows — double-click `start.bat`**, or manually:
 
-# Or manually:
-# Terminal 1 — Backend
+```bash
+# Terminal 1 — backend
 py -3 -m uvicorn backend.main:app --reload --port 8000
 
-# Terminal 2 — Frontend
+# Terminal 2 — frontend
 cd frontend && npm run dev
 ```
 
-Open **http://localhost:5173** — API docs at **http://localhost:8000/docs**
+| Service | URL |
+|---|---|
+| Frontend (chat) | http://localhost:5173 |
+| Log viewer | http://localhost:5173/logs |
+| Backend API | http://localhost:8000 |
+| Swagger docs | http://localhost:8000/docs |
 
-> **Note:** `localforge.json` is gitignored — it contains your local config and secrets.
-> Never commit it. Use `localforge.example.json` as the reference template.
+---
 
-## Configuration (`localforge.json`)
+## Configuration
 
-All settings are also editable from the **Settings panel** in the UI.
+### `localforge.json` (seed only)
 
-| Field | Description |
-|-------|-------------|
-| `default_model` | Model used by default for new conversations |
-| `models[].provider` | `anthropic` \| `ollama` \| `openai` \| `groq` \| `openrouter` \| `together` \| `mistral` \| `deepseek` |
-| `models[].api_key_env` | Environment variable holding the API key |
-| `models[].base_url` | Base URL (required for Ollama / OpenAI-compat) |
-| `tools.filesystem.allowed_paths` | Directories the agent can access (`~` = home) |
-| `tools.filesystem.require_confirmation_for` | Ask before `write_file` / `delete_file` |
-| `tools.filesystem.max_file_size_mb` | Max file size the agent can read |
-| `tools.terminal.require_confirmation` | Ask before every shell command |
-| `tools.terminal.timeout_seconds` | Command timeout |
-| `tools.terminal.blocked_patterns` | Commands that are always rejected |
-| `tools.web_search.max_results` | Results returned per search |
-| `agent.max_iterations` | Max tool-call rounds per message |
-| `agent.system_prompt` | Agent persona / instructions |
-| `telegram.enabled` | Enable the Telegram bot |
-| `telegram.bot_token` | Token from [@BotFather](https://t.me/BotFather) |
-| `telegram.allowed_user_ids` | Telegram user IDs allowed to use the bot (empty = anyone) |
-| `telegram.default_model` | Model used by the Telegram bot (empty = global default) |
+Used **only on first boot** to seed the database. After that, all config is managed via the **Settings** panel and stored in the DB. Editing this file after first boot has no effect.
 
-## Model Providers
+```jsonc
+{
+  "version": "1.0",
+  "default_model": "",           // set via Settings → Models
+  "models": [],                  // add models via Settings → Models
+  "tools": {
+    "filesystem": {
+      "enabled": true,
+      "allowed_paths": ["~"],    // directories the agent can access
+      "require_confirmation_for": ["write_file", "delete_file"],
+      "max_file_size_mb": 10
+    },
+    "terminal": {
+      "enabled": true,
+      "require_confirmation": true,
+      "timeout_seconds": 30,
+      "blocked_patterns": ["rm -rf /", "format c:"]
+    },
+    "web_search": { "enabled": true, "max_results": 5 }
+  },
+  "agent": {
+    "max_iterations": 20,
+    "system_prompt": "..."
+  },
+  "telegram": {
+    "enabled": false,
+    "bot_token": "",             // token from @BotFather
+    "allowed_user_ids": [],      // empty = allow all users
+    "default_model": ""          // empty = use global default
+  }
+}
+```
 
-LocalForge supports any OpenAI-compatible API. Common providers:
+---
 
-| Provider | `provider` value | Needs `api_key_env` | Needs `base_url` |
-|----------|-----------------|---------------------|------------------|
-| Anthropic (Claude) | `anthropic` | ✅ `ANTHROPIC_API_KEY` | — |
-| Ollama (local) | `ollama` | — | `http://localhost:11434/v1` |
-| Groq | `groq` | ✅ `GROQ_API_KEY` | — |
-| OpenRouter | `openrouter` | ✅ `OPENROUTER_API_KEY` | — |
-| Together | `together` | ✅ `TOGETHER_API_KEY` | — |
-| Mistral | `mistral` | ✅ `MISTRAL_API_KEY` | — |
-| DeepSeek | `deepseek` | ✅ `DEEPSEEK_API_KEY` | — |
-| OpenAI | `openai` | ✅ `OPENAI_API_KEY` | — |
+## Providers & Models
 
-Ollama models are **auto-discovered** — they appear in the selector without manual config.
+Providers and models are fully managed from **Settings → Providers** and **Settings → Models**. Changes take effect immediately without restarting the server.
 
-## Image & PDF Attachments
+### Builtin providers
 
-- **Images** — drag & drop or use the 📎 button (JPEG, PNG, GIF, WebP — up to 5 MB each)
-- **PDFs** — attach PDFs and the agent will read and summarize their contents (up to 10 MB each)
-- **Text files** — paste code files or logs directly into the chat
+| Provider | Base URL | API key env var |
+|---|---|---|
+| Ollama (local) | `http://localhost:11434/v1` | _(none needed)_ |
+| Anthropic | _(native SDK)_ | `ANTHROPIC_API_KEY` |
+| OpenAI | `https://api.openai.com/v1` | `OPENAI_API_KEY` |
+| Groq | `https://api.groq.com/openai/v1` | `GROQ_API_KEY` |
+| OpenRouter | `https://openrouter.ai/api/v1` | `OPENROUTER_API_KEY` |
+| Together AI | `https://api.together.xyz/v1` | `TOGETHER_API_KEY` |
+| Mistral | `https://api.mistral.ai/v1` | `MISTRAL_API_KEY` |
+| DeepSeek | `https://api.deepseek.com/v1` | `DEEPSEEK_API_KEY` |
 
-Attachments are sent to the model as multimodal content. PDF text extraction requires `pypdf`:
+> **Ollama** models are auto-discovered — they appear in the model selector without manual registration.
+>
+> **OpenRouter** model names use the `provider/model-name` format (e.g. `openai/gpt-4o`, `meta-llama/llama-3.3-70b`). Always select provider **openrouter** for these.
 
+---
+
+## Database schema
+
+```
+conversations  (id, title, created_at, updated_at)
+messages       (id, conversation_id, role, content, created_at)
+models         (id, name, display_name, provider, api_key, base_url, is_default, created_at)
+providers      (id, name, display_name, base_url, api_key_env, is_builtin, created_at)
+settings       (setting_key, value)   ← app config as JSON blob
+```
+
+SQLite (`localforge.db`) is used by default. Set `DATABASE_URL=mysql://...` in `.env` to use MySQL.
+
+---
+
+## API reference
+
+| Method | Endpoint | Description |
+|---|---|---|
+| `GET` | `/api/health` | Health check — always public |
+| `GET/PUT` | `/api/config` | Get / update app config |
+| `GET` | `/api/config/models` | List models available for the selector (includes Ollama discovery) |
+| `POST` | `/api/config/telegram/restart` | Restart Telegram bot |
+| `GET` | `/api/conversations` | List conversations |
+| `POST` | `/api/conversations` | Create conversation |
+| `GET` | `/api/conversations/{id}` | Get conversation with messages |
+| `DELETE` | `/api/conversations/{id}` | Delete conversation |
+| `PATCH` | `/api/conversations/{id}/title` | Rename conversation |
+| `POST` | `/api/conversations/{id}/chat` | Send message (SSE stream) |
+| `POST` | `/api/conversations/{id}/approve` | Confirm / cancel a tool call |
+| `GET/POST` | `/api/models` | List / create models |
+| `PUT/DELETE` | `/api/models/{id}` | Update / delete model |
+| `PATCH` | `/api/models/{id}/default` | Set default model |
+| `POST` | `/api/models/{id}/test` | Test model connectivity |
+| `GET/POST` | `/api/providers` | List / create providers |
+| `PUT/DELETE` | `/api/providers/{id}` | Update / delete provider |
+| `GET` | `/api/stats` | System stats (CPU, RAM, GPU via Ollama) |
+| `GET` | `/api/logs` | Recent log entries — `?n=500&level=ERROR` |
+| `GET` | `/api/logs/stream` | Live log stream (SSE) — `?api_key=...` |
+
+Full interactive docs: **http://localhost:8000/docs**
+
+---
+
+## Developer mode
+
+Enable **Developer mode** via the toggle at the bottom of the sidebar. A **View app logs** button appears that opens a live log viewer at `/logs` in a new tab.
+
+The viewer captures all Python logging output in real time via SSE:
+
+- Filter by level: DEBUG / INFO / WARNING / ERROR
+- Text search across message and logger name
+- Pause / Resume stream, auto-scroll with "Jump to latest"
+- Loads last 2000 entries on open, then streams new ones live
+
+To add custom log output from any backend module:
+
+```python
+import logging
+logger = logging.getLogger(__name__)
+logger.info("This appears in the log viewer automatically")
+```
+
+---
+
+## Image & PDF attachments
+
+- **Images** — drag & drop or use the 📎 button (JPEG, PNG, GIF, WebP)
+- **PDFs** — attached PDFs are read and analyzed by the agent
+- **Text files** — paste code or logs directly into the chat
+
+PDF text extraction requires `pypdf`:
 ```bash
 py -3 -m pip install pypdf
 ```
 
-## Persistent Memory
+---
+
+## Persistent memory
 
 The agent can remember information across conversations. Ask it to:
 
-- **Save something:** "recuerda que mi proyecto usa Laravel" → writes to `~/.localforge_memory.md`
+- **Save:** "recuerda que mi proyecto usa Laravel" → appends to `~/.localforge_memory.md`
 - **Recall:** "qué recuerdas de mí?" → reads the memory file
 - **Clear:** "borra tu memoria" → empties the file
 
 The memory file is automatically injected into the system prompt at the start of every conversation.
 
-## API Key Authentication
+---
 
-To protect LocalForge when running on a server, set `API_KEY` in your `.env`:
+## API key authentication
+
+To protect LocalForge when running on a network, set `API_KEY` in `.env`:
 
 ```env
 API_KEY=your-secret-password
 ```
 
-- The frontend will show a login screen and store the key in `localStorage`
+- The frontend shows a login screen on first visit; the key is stored in `localStorage`
+- `/api/health` is always public
+- SSE endpoints accept the key via `?api_key=` query param (required for `EventSource`)
 - If `API_KEY` is not set, the server is open (suitable for local use)
-- The `/api/health` endpoint is always public
 
-## Using Ollama
+---
 
-1. Install [Ollama](https://ollama.ai) and pull a model: `ollama pull llama3.2`
-2. Models are **auto-discovered** — just open the UI and they appear in the selector
-3. Optionally pin a model in `localforge.json`:
-
-```json
-{
-  "name": "llama3.2",
-  "display_name": "Llama 3.2 (local)",
-  "provider": "ollama",
-  "base_url": "http://localhost:11434/v1"
-}
-```
-
-## Server Deployment
-
-See **[DEPLOY.md](DEPLOY.md)** for full instructions. Quick summary:
-
-- **Option A** — FastAPI serves everything on port 8000 (simple, no nginx)
-- **Option B** — nginx reverse proxy + systemd service (recommended for production)
-- **Option C** — with Ollama running on the same server
-
-Deployment scripts are in the `deploy/` folder.
-
-## Telegram Bot
+## Telegram bot
 
 1. Create a bot with [@BotFather](https://t.me/BotFather) and copy the token
-2. Open Settings → Telegram → enable the toggle and paste the token
-3. Click **Save** — the bot starts automatically (no restart needed)
-4. Send `/start` to your bot
+2. Go to **Settings → Telegram**, enable the bot and paste the token
+3. Optionally add your Telegram user ID to **Allowed user IDs** (get it from [@userinfobot](https://t.me/userinfobot))
+4. Click **Save** — the bot restarts automatically
 
 Commands: `/start` (reset conversation) · `/new` (new conversation)
 
-To restrict access, add your Telegram user ID to **Allowed User IDs**
-(get it from [@userinfobot](https://t.me/userinfobot)).
+---
 
-## Settings Panel
+## Settings panel
 
-Open via the ⚙ icon. Display preferences apply instantly; tool/agent changes require **Save**.
+| Section | Description |
+|---|---|
+| **Appearance** | Light / dark theme, render markdown, show tool steps |
+| **Filesystem** | Enable/disable, allowed paths, confirmation rules, max file size |
+| **Terminal** | Enable/disable, timeout, blocked command patterns |
+| **Web Search** | Enable/disable, max results |
+| **Agent** | Max iterations, system prompt |
+| **Telegram** | Bot token, allowed user IDs, default model |
+| **Models** | Add, edit, delete, set default; test connectivity per model |
+| **Providers** | Add, edit, delete provider definitions (base URL + API key env var) |
 
-| Setting | Description |
-|---------|-------------|
-| Theme | Light / Dark |
-| Render markdown | Enable markdown + syntax highlighting in responses |
-| Show tool steps | Toggle tool call visibility (advanced / simple mode) |
-| Filesystem | Enable/disable, set allowed paths and confirmation rules |
-| Terminal | Enable/disable, set timeout and blocked patterns |
-| Web Search | Enable/disable, set max results |
-| Agent | Max iterations and system prompt |
-| Telegram | Bot token, allowed users, default model |
+---
 
-## API
+## License
 
-| Method | Endpoint | Description |
-|--------|----------|-------------|
-| `GET`  | `/api/health` | Health check |
-| `GET`  | `/api/config` | Get current config (token masked) |
-| `PUT`  | `/api/config` | Update config |
-| `GET`  | `/api/config/models` | List available models |
-| `POST` | `/api/config/telegram/restart` | Restart Telegram bot with current config |
-| `GET`  | `/api/conversations` | List conversations |
-| `POST` | `/api/conversations` | Create conversation |
-| `GET`  | `/api/conversations/{id}` | Get conversation with messages |
-| `DELETE` | `/api/conversations/{id}` | Delete conversation |
-| `PATCH` | `/api/conversations/{id}/title` | Rename conversation |
-| `POST` | `/api/conversations/{id}/chat` | Send message (SSE stream) |
-| `POST` | `/api/conversations/{id}/approve` | Confirm / cancel a tool call |
-
-Full interactive docs: **http://localhost:8000/docs**
+MIT

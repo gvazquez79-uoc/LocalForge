@@ -80,10 +80,16 @@ class LocalForgeConfig(BaseModel):
         return None
 
     def get_model_api_key(self, model: ModelConfig) -> Optional[str]:
+        # 1. Explicit key stored in DB
         if model.api_key:
             return model.api_key
+        # 2. Explicit env-var name configured
         if model.api_key_env:
             return os.environ.get(model.api_key_env)
+        # 3. Auto-detect from standard env var for known providers
+        env_var = _PROVIDER_ENV_VARS.get(model.provider)
+        if env_var:
+            return os.environ.get(env_var)
         return None
 
     def resolve_allowed_paths(self) -> list[Path]:
@@ -102,6 +108,19 @@ class AppSettings(BaseSettings):
 
     model_config = {"env_prefix": "LOCALFORGE_", "env_file": ".env", "extra": "ignore"}
 
+
+# Standard env-var names for known providers (fallback when no key stored in DB).
+# Populated from DB at startup via refresh_providers_cache(); defaults used before
+# the DB is available.
+_PROVIDER_ENV_VARS: dict[str, str] = {
+    "anthropic":  "ANTHROPIC_API_KEY",
+    "groq":       "GROQ_API_KEY",
+    "openai":     "OPENAI_API_KEY",
+    "openrouter": "OPENROUTER_API_KEY",
+    "mistral":    "MISTRAL_API_KEY",
+    "deepseek":   "DEEPSEEK_API_KEY",
+    "together":   "TOGETHER_API_KEY",
+}
 
 # ── Singleton loaders ─────────────────────────────────────────────────────────
 
@@ -201,3 +220,29 @@ async def refresh_models_from_db() -> None:
                     break
     except Exception:
         pass  # DB not available — keep JSON models
+
+
+async def refresh_providers_cache() -> None:
+    """Load providers from DB and update the in-memory caches used by
+    get_model_api_key() and registry.get_adapter().
+    Called at startup and after any provider CRUD operation."""
+    global _PROVIDER_ENV_VARS
+    try:
+        from backend.db.providers_store import get_provider_map
+        pmap = await get_provider_map()
+        # Update env-var lookup table
+        _PROVIDER_ENV_VARS = {
+            name: info["api_key_env"]
+            for name, info in pmap.items()
+            if info.get("api_key_env")
+        }
+        # Update provider base-URL defaults in the model registry
+        from backend.models.registry import update_provider_defaults
+        provider_urls = {
+            name: info["base_url"]
+            for name, info in pmap.items()
+            if info.get("base_url")
+        }
+        update_provider_defaults(provider_urls)
+    except Exception:
+        pass  # Keep current cache if DB unavailable

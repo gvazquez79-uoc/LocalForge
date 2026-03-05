@@ -7,6 +7,8 @@ interface PrefsState {
   setRenderMarkdown: (v: boolean) => void;
   showToolCalls: boolean;
   setShowToolCalls: (v: boolean) => void;
+  devMode: boolean;
+  setDevMode: (v: boolean) => void;
 }
 
 function load(): Partial<PrefsState> {
@@ -31,5 +33,10 @@ export const usePrefs = create<PrefsState>((set) => ({
   setShowToolCalls: (v) => {
     save({ showToolCalls: v });
     set({ showToolCalls: v });
+  },
+  devMode: (load().devMode as boolean) ?? false,
+  setDevMode: (v) => {
+    save({ devMode: v });
+    set({ devMode: v });
   },
 }));

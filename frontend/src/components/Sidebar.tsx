@@ -1,10 +1,11 @@
 import { useEffect, useRef, useState } from "react";
-import { Plus, Trash2, MessageSquare, Hammer, Settings, Pencil, Database } from "lucide-react";
+import { Plus, Trash2, MessageSquare, Hammer, Settings, Pencil, Database, ScrollText, Bug } from "lucide-react";
 import { useChatStore } from "../store/chat";
 import { ModelSelector } from "./ModelSelector";
 import { StatsBar } from "./StatsBar";
 import { checkHealth } from "../api/client";
 import type { HealthStatus } from "../api/client";
+import { usePrefs } from "../store/prefs";
 
 type ConnStatus = "checking" | "connected" | "disconnected";
 
@@ -65,6 +66,7 @@ interface SidebarProps {
 
 export function Sidebar({ onSettings }: SidebarProps) {
   const { apiStatus, dbStatus, dbType } = useConnectionStatus();
+  const { devMode, setDevMode } = usePrefs();
   const {
     conversations,
     activeConvId,
@@ -100,7 +102,7 @@ export function Sidebar({ onSettings }: SidebarProps) {
 
       {/* Model selector */}
       <div className="px-3 py-3 border-b border-gray-200 dark:border-zinc-800">
-        <ModelSelector />
+        <ModelSelector onOpenSettings={onSettings} />
       </div>
 
       {/* New chat button */}
@@ -139,8 +141,8 @@ export function Sidebar({ onSettings }: SidebarProps) {
       {/* Resource usage */}
       <StatsBar />
 
-      {/* Settings button */}
-      <div className="border-t border-gray-200 dark:border-zinc-800 px-3 py-3">
+      {/* Footer: Settings + Developer mode ─────────────────────────────── */}
+      <div className="border-t border-gray-200 dark:border-zinc-800 px-3 py-3 space-y-1">
         <button
           onClick={onSettings}
           className="flex items-center gap-2 w-full px-3 py-2 rounded-lg text-gray-500 hover:text-gray-800 hover:bg-gray-100 dark:text-zinc-500 dark:hover:text-zinc-200 dark:hover:bg-zinc-800 text-sm transition-colors"
@@ -148,6 +150,46 @@ export function Sidebar({ onSettings }: SidebarProps) {
           <Settings size={15} />
           Settings
         </button>
+
+        {/* Developer mode toggle */}
+        <label className="flex items-center gap-2 px-3 py-2 rounded-lg cursor-pointer
+                          hover:bg-gray-100 dark:hover:bg-zinc-800 transition-colors group">
+          <Bug
+            size={15}
+            className={devMode
+              ? "text-amber-500"
+              : "text-gray-400 dark:text-zinc-600 group-hover:text-gray-600 dark:group-hover:text-zinc-400"}
+          />
+          <span className="flex-1 text-sm text-gray-500 dark:text-zinc-500 group-hover:text-gray-800 dark:group-hover:text-zinc-200 transition-colors">
+            Developer mode
+          </span>
+          {/* Mini toggle */}
+          <button
+            role="switch"
+            aria-checked={devMode}
+            onClick={() => setDevMode(!devMode)}
+            className={`relative inline-flex h-4 w-7 flex-shrink-0 rounded-full transition-colors ${
+              devMode ? "bg-amber-500" : "bg-gray-200 dark:bg-zinc-700"
+            }`}
+          >
+            <span className={`inline-block h-3 w-3 rounded-full bg-white shadow transition-transform mt-0.5 ${
+              devMode ? "translate-x-3.5" : "translate-x-0.5"
+            }`} />
+          </button>
+        </label>
+
+        {/* App logs button — only visible in dev mode */}
+        {devMode && (
+          <button
+            onClick={() => window.open("/logs", "_blank")}
+            className="flex items-center gap-2 w-full px-3 py-2 rounded-lg
+                       text-amber-600 dark:text-amber-400 hover:bg-amber-50 dark:hover:bg-amber-950/30
+                       text-sm transition-colors"
+          >
+            <ScrollText size={15} />
+            View app logs
+          </button>
+        )}
       </div>
     </aside>
   );

@@ -283,6 +283,65 @@ export async function setDefaultDbModel(id: string): Promise<DbModel> {
   return res.json();
 }
 
+export interface TestModelResult {
+  ok: boolean;
+  response?: string;
+  error?: string;
+}
+
+export async function testDbModel(id: string): Promise<TestModelResult> {
+  const res = await fetch(`${BASE}/models/${id}/test`, {
+    method: "POST",
+    headers: authHeaders(),
+  });
+  return res.json();
+}
+
+// ── Providers (CRUD) ──────────────────────────────────────────────────────────
+
+export interface DbProvider {
+  id: string;
+  name: string;
+  display_name: string;
+  base_url: string;
+  api_key_env: string;
+  is_builtin: boolean;
+}
+
+export async function listProviders(): Promise<DbProvider[]> {
+  const res = await fetch(`${BASE}/providers`, { headers: authHeaders() });
+  if (!res.ok) throw new Error(await res.text());
+  return res.json();
+}
+
+export async function createProvider(data: { name: string; display_name: string; base_url?: string; api_key_env?: string }): Promise<DbProvider> {
+  const res = await fetch(`${BASE}/providers`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", ...authHeaders() },
+    body: JSON.stringify(data),
+  });
+  if (!res.ok) throw new Error(await res.text());
+  return res.json();
+}
+
+export async function updateProvider(id: string, data: Partial<{ name: string; display_name: string; base_url: string; api_key_env: string }>): Promise<DbProvider> {
+  const res = await fetch(`${BASE}/providers/${id}`, {
+    method: "PUT",
+    headers: { "Content-Type": "application/json", ...authHeaders() },
+    body: JSON.stringify(data),
+  });
+  if (!res.ok) throw new Error(await res.text());
+  return res.json();
+}
+
+export async function deleteProvider(id: string): Promise<void> {
+  const res = await fetch(`${BASE}/providers/${id}`, {
+    method: "DELETE",
+    headers: authHeaders(),
+  });
+  if (!res.ok) throw new Error(await res.text());
+}
+
 // ── System stats ──────────────────────────────────────────────────────────────
 
 export interface GpuStats {
