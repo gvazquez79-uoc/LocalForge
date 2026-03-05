@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { Cpu, MemoryStick, Layers, BrainCircuit } from "lucide-react";
 import { getStats } from "../api/client";
 import type { SystemStats, OllamaModel } from "../api/client";
+import { useChatStore } from "../store/chat";
 
 // ── Shared bar ────────────────────────────────────────────────────────────────
 
@@ -94,6 +95,7 @@ function OllamaRow({ model }: { model: OllamaModel }) {
 
 export function StatsBar() {
   const [stats, setStats] = useState<SystemStats | null>(null);
+  const selectedModel = useChatStore(s => s.selectedModel);
 
   useEffect(() => {
     let cancelled = false;
@@ -114,6 +116,13 @@ export function StatsBar() {
       document.removeEventListener("visibilitychange", poll);
     };
   }, []);
+
+  // Trigger an extra immediate fetch whenever the selected model changes
+  // (so VRAM/Ollama info updates right away instead of waiting up to 3s)
+  useEffect(() => {
+    if (!selectedModel) return;
+    getStats().then(s => setStats(s)).catch(() => {});
+  }, [selectedModel]);
 
   if (!stats) return null;
 

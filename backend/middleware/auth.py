@@ -31,18 +31,28 @@ async def api_key_middleware(request: Request, call_next):
     if not api_key:
         return await call_next(request)
 
+    # Always allow CORS preflight — OPTIONS requests carry no body and no auth headers.
+    # The actual authenticated request (POST/PUT/DELETE) is checked below.
+    if request.method == "OPTIONS":
+        return await call_next(request)
+
     # Always allow public paths
     if request.url.path in _PUBLIC_PATHS:
         return await call_next(request)
 
-    # Extract key from headers
+    # Extract key from headers (normal requests)
     auth_header = request.headers.get("Authorization", "")
     x_api_key   = request.headers.get("X-API-Key", "")
+    # Also accept ?api_key= query param — needed for EventSource (SSE) which
+    # cannot set custom headers from the browser.
+    q_api_key   = request.query_params.get("api_key", "")
 
     if auth_header.startswith("Bearer "):
         provided = auth_header[7:].strip()
     elif x_api_key:
         provided = x_api_key.strip()
+    elif q_api_key:
+        provided = q_api_key.strip()
     else:
         provided = ""
 

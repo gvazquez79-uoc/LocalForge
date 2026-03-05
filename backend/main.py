@@ -15,14 +15,20 @@ from fastapi.staticfiles import StaticFiles
 # Load .env before anything else
 load_dotenv()
 
-from backend.config import load_config, get_settings, refresh_config_from_db, refresh_models_from_db
+# Set up in-memory log buffer as early as possible so we capture startup logs
+from backend.logging_setup import setup_logging
+setup_logging()
+
+from backend.config import load_config, get_settings, refresh_config_from_db, refresh_models_from_db, refresh_providers_cache
 from backend.db.connection import init_pool, close_pool
 from backend.db.store import init_db
 from backend.middleware.auth import api_key_middleware
 from backend.routers.chat import router as chat_router
 from backend.routers.config import router as config_router
 from backend.routers.models import router as models_router
+from backend.routers.providers import router as providers_router
 from backend.routers.stats import router as stats_router
+from backend.routers.logs import router as logs_router
 
 
 @asynccontextmanager
@@ -36,6 +42,12 @@ async def lifespan(app: FastAPI):
     from backend.db.settings_store import init_settings_table
     await init_settings_table()
     await refresh_config_from_db()
+
+    # Init providers table and seed builtins on first run
+    from backend.db.providers_store import init_providers_table, seed_providers
+    await init_providers_table()
+    await seed_providers()
+    await refresh_providers_cache()
 
     # Init models table and seed from localforge.json if empty
     # refresh_models_from_db runs AFTER refresh_config_from_db so DB models win
@@ -84,10 +96,12 @@ app.add_middleware(
 
 app.middleware("http")(api_key_middleware)
 
-app.include_router(chat_router, prefix="/api")
-app.include_router(config_router, prefix="/api")
-app.include_router(models_router, prefix="/api")
-app.include_router(stats_router,  prefix="/api")
+app.include_router(chat_router,      prefix="/api")
+app.include_router(config_router,    prefix="/api")
+app.include_router(models_router,    prefix="/api")
+app.include_router(providers_router, prefix="/api")
+app.include_router(stats_router,     prefix="/api")
+app.include_router(logs_router,      prefix="/api")
 
 
 @app.get("/api/health")

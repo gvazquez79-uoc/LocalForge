@@ -334,8 +334,23 @@ async def _handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 async def start_telegram_bot() -> None:
-    """Start the Telegram bot (non-blocking — returns immediately)."""
+    """Start the Telegram bot (non-blocking — returns immediately).
+
+    Always stops any running instance first to prevent the Telegram
+    "Conflict: terminated by other getUpdates request" error that occurs
+    when two instances poll simultaneously.
+    """
     global _app
+    import asyncio
+
+    # Guard: stop any existing instance before creating a new one.
+    # Without this, rapid restarts leave the old updater polling while
+    # the new one starts, causing a Conflict error on both ends.
+    if _app is not None:
+        await stop_telegram_bot()
+        # Brief pause — Telegram's servers may hold the TCP connection
+        # open for a moment after the old instance disconnects.
+        await asyncio.sleep(0.5)
 
     cfg = get_config()
     if not cfg.telegram.enabled:
@@ -358,11 +373,26 @@ async def start_telegram_bot() -> None:
         # run_polling() is a standalone entry-point and must NOT be used here.
         await _app.initialize()
         await _app.start()
-        await _app.updater.start_polling(drop_pending_updates=True)
+        await _app.updater.start_polling(
+            drop_pending_updates=True,
+            error_callback=_polling_error_callback,
+        )
         logger.info("Telegram bot started")
     except Exception:
         logger.exception("Failed to start Telegram bot — check token in settings")
         _app = None
+
+
+def _polling_error_callback(error: Exception) -> None:
+    """Handle polling errors. Conflict errors are expected during restarts."""
+    from telegram.error import Conflict, NetworkError, TimedOut
+    if isinstance(error, Conflict):
+        # Another instance displaced us — this is normal during a restart cycle.
+        logger.debug("Telegram Conflict (expected during restart): %s", error)
+    elif isinstance(error, (NetworkError, TimedOut)):
+        logger.warning("Telegram network issue (will retry): %s", error)
+    else:
+        logger.error("Telegram polling error: %s", error)
 
 
 async def stop_telegram_bot() -> None:

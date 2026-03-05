@@ -65,13 +65,19 @@ async def create_model(
     model_id = str(uuid.uuid4())
     if is_default:
         await _clear_default()
-    async with get_db() as db:
-        await db.execute(
-            "INSERT INTO models (id, name, display_name, provider, api_key, base_url, is_default) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?)",
-            (model_id, name, display_name, provider, api_key or None, base_url or None, 1 if is_default else 0),
-        )
-        await db.commit()
+    try:
+        async with get_db() as db:
+            await db.execute(
+                "INSERT INTO models (id, name, display_name, provider, api_key, base_url, is_default) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?)",
+                (model_id, name, display_name, provider, api_key or None, base_url or None, 1 if is_default else 0),
+            )
+            await db.commit()
+    except Exception as exc:
+        msg = str(exc)
+        if "1062" in msg or "UNIQUE" in msg.upper() or "unique" in msg:
+            raise ValueError(f"Ya existe un modelo con el nombre '{name}'. Usa un nombre diferente.") from exc
+        raise
     row = await _fetch_by_id(model_id)
     return _row_to_dict_masked(row)
 
