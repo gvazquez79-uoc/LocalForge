@@ -110,7 +110,7 @@ export function Message({ message }: MessageProps) {
       <div
         className={`flex-shrink-0 w-8 h-8 rounded-full flex items-center justify-center text-xs ${
           isUser
-            ? "bg-indigo-600 text-white"
+            ? "bg-emerald-600 text-white"
             : "bg-gray-100 border border-gray-200 text-emerald-600 dark:bg-zinc-800 dark:border-zinc-700 dark:text-emerald-400"
         }`}
       >
@@ -131,7 +131,7 @@ export function Message({ message }: MessageProps) {
           <div className="flex flex-wrap gap-2 justify-end mb-1">
             {message.attachments.map((att, i) =>
               att.isPdf ? (
-                <div key={i} className="flex items-center gap-1.5 px-2.5 py-1.5 bg-indigo-500/80 rounded-lg text-xs text-white">
+                <div key={i} className="flex items-center gap-1.5 px-2.5 py-1.5 bg-emerald-500/80 rounded-sm text-xs text-white">
                   <FileText size={13} />
                   <span className="max-w-[160px] truncate">{att.name}</span>
                 </div>
@@ -141,7 +141,7 @@ export function Message({ message }: MessageProps) {
                   src={att.dataUrl}
                   alt={att.name}
                   title={att.name}
-                  className="h-24 max-w-[200px] object-cover rounded-lg border border-indigo-400/50"
+                  className="h-24 max-w-[200px] object-cover rounded-sm border border-emerald-400/50"
                 />
               )
             )}
@@ -152,7 +152,7 @@ export function Message({ message }: MessageProps) {
           <div
             className={`px-4 py-3 rounded-2xl text-sm leading-relaxed ${
               isUser
-                ? "bg-indigo-600 text-white rounded-tr-sm"
+                ? "bg-emerald-600 text-white rounded-tr-sm"
                 : "bg-gray-100 text-gray-900 rounded-tl-sm dark:bg-zinc-800 dark:text-zinc-100"
             }`}
           >

@@ -61,8 +61,10 @@ def _tools_to_openai(tools: list[BaseTool]) -> list[dict]:
     return [t.to_openai_schema() for t in tools]
 
 
-# Phrases that indicate the model claims to have done something without a tool call
+# Phrases that indicate the model claims to have done something without a tool call,
+# OR that it promises access/capability without actually calling a tool.
 _HALLUCINATION_PATTERNS = [
+    # Claims of past actions (ES)
     "acabo de guardar",
     "he guardado",
     "ya guardé",
@@ -73,7 +75,6 @@ _HALLUCINATION_PATTERNS = [
     "he ejecutado",
     "ya ejecuté",
     "acabo de escribir",
-    "he escrito",
     "acabo de realizar",
     "he realizado",
     "acabo de leer",
@@ -82,10 +83,72 @@ _HALLUCINATION_PATTERNS = [
     "he hecho",
     "listo, he ",
     "perfecto, acabo",
+    # Claims of past actions (EN)
     "i have saved",
     "i've saved",
     "i have written",
     "i've written",
+    "i have executed",
+    "i've executed",
+    "i have read",
+    "i've read",
+    "i have listed",
+    "i've listed",
+    # Promising capability without doing it (ES) — triggers when no tool was called
+    "soy un modelo local",
+    "ejecuto directamente en tu",
+    "tengo acceso a tu sistema",
+    "tengo acceso a tus archivos",
+    "tengo acceso al sistema",
+    "puedo listar los archivos",
+    "puedo listar tus archivos",
+    "puedo ver los archivos",
+    "puedo ejecutar comandos",
+    "puedo leer tus archivos",
+    "puedo acceder a tu",
+    # Self-introduction + capability list without doing anything (ES)
+    "soy localforge",
+    "estoy listo para ayudarte",
+    "estoy aquí para ayudarte",
+    "analizar archivos y directorios",
+    "ejecutar comandos en terminal",
+    "buscar información en internet",
+    "ayudar con código",
+    "¿qué necesitas hacer",
+    "que necesitas hacer",
+    "recuerda que puedo",
+    "nota: si quieres continuar",
+    "si quieres continuar con algo",
+    "solo dime \"si\"",
+    "solo dime 'si'",
+    "¿en qué puedo ayudarte hoy",
+    "en qué puedo ayudarte hoy",
+    "¿qué quieres que haga hoy",
+    "qué quieres que haga hoy",
+    "especializado en tareas técnicas",
+    "asistente de ia especializado",
+    # Promising capability without doing it (EN)
+    "i have access to your",
+    "i can list the files",
+    "i can list your files",
+    "i can read your files",
+    "i can see your files",
+    "i can access your",
+    "i can execute commands",
+    "i run directly on",
+    "i'm a local",
+    # Self-introduction + capability list without doing anything (EN)
+    "i'm localforge",
+    "i am localforge",
+    "i'm ready to help you",
+    "i'm here to help you",
+    "what do you need today",
+    "what would you like me to do today",
+    "analyze files and directories",
+    "execute terminal commands",
+    "remember, i can",
+    "just say \"yes\"",
+    "just say 'yes'",
 ]
 
 
@@ -186,23 +249,39 @@ async def run_agent(
                 })
             working_messages.append({"role": "assistant", "content": content_blocks})
         else:
-            working_messages.append({"role": "assistant", "content": assistant_text})
+            assistant_msg: dict = {"role": "assistant", "content": assistant_text or None}
+            if tool_calls:
+                assistant_msg["tool_calls"] = [
+                    {
+                        "id": tc["id"],
+                        "type": "function",
+                        "function": {
+                            "name": tc["name"],
+                            "arguments": json.dumps(tc["input"]),
+                        },
+                    }
+                    for tc in tool_calls
+                ]
+            working_messages.append(assistant_msg)
 
         if not tool_calls:
-            # Detect if the model claimed to do something without calling a tool
+            # Detect if the model claimed to do something without calling a tool,
+            # or promised capability without demonstrating it.
             if assistant_text and _detect_hallucinated_action(assistant_text):
                 correction = (
-                    "[SISTEMA] Dijiste que realizaste una acción pero no llamaste "
-                    "a ninguna herramienta. Debes usar la herramienta apropiada "
-                    "AHORA MISMO para completar lo que prometiste. "
-                    "No respondas con texto — llama directamente a la herramienta."
+                    "[SYSTEM] You described having capabilities or claimed to take an action, "
+                    "but you did NOT call any tool. You MUST call the appropriate tool RIGHT NOW. "
+                    "Do not write more text explaining what you can do — just call the tool. "
+                    "For example: if the user asked to list files, call list_directory(). "
+                    "If they asked to run a command, call execute_command(). "
+                    "Call the tool NOW."
                 )
                 yield StreamEvent(
                     type="warning",
-                    data={"message": "⚠️ El modelo afirmó realizar una acción sin usar herramientas. Solicitando corrección..."},
+                    data={"message": "⚠️ El modelo describió capacidades sin llamar a ninguna herramienta. Solicitando que actúe..."},
                 )
                 working_messages.append({"role": "user", "content": correction})
-                # Continue to next iteration so the model can actually call the tool
+                # Continue to next iteration so the model actually calls the tool
                 continue
             return
 

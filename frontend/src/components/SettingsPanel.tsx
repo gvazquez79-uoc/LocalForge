@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, type ReactNode } from "react";
 import {
   X,
   FolderOpen,
@@ -11,23 +11,46 @@ import {
   AlertCircle,
   Sun,
   Moon,
+  Monitor,
   Send,
   Cpu,
   Edit2,
   Star,
+  Eye,
+  EyeOff,
 } from "lucide-react";
 import {
   getConfig, saveConfig, restartTelegramBot,
   listDbModels, createDbModel, updateDbModel, deleteDbModel, setDefaultDbModel, testDbModel,
   listProviders, createProvider, updateProvider, deleteProvider,
 } from "../api/client";
-import type { LocalForgeConfig, DbModel, DbProvider } from "../api/client";
+import type { LocalForgeConfig, DbModel, DbProvider, DbProviderUpdate } from "../api/client";
 import { getStoredTheme, setTheme } from "../store/theme";
 import type { Theme } from "../store/theme";
 import { usePrefs } from "../store/prefs";
 import { useChatStore } from "../store/chat";
 import { ConfirmDialog } from "./ConfirmDialog";
 import type { ConfirmDialogOptions } from "./ConfirmDialog";
+
+// Must stay in sync with AgentConfig.system_prompt default in backend/config.py
+const DEFAULT_SYSTEM_PROMPT =
+  "You are LocalForge, an AI agent that uses tools to interact with the user's computer.\n\n" +
+  "CRITICAL RULES — follow these exactly, without exception:\n" +
+  "1. When the user asks you to DO something (list files, read a file, run a command, " +
+  "search the web), call the appropriate tool IMMEDIATELY. Never just describe what you " +
+  "would do — actually do it.\n" +
+  "2. NEVER say 'I can...', 'I have access to...', 'I can list...', 'I can read...' " +
+  "without IMMEDIATELY calling a tool to prove it.\n" +
+  "3. You are an AI model running via API. Do not claim to be a 'local model' or claim " +
+  "to run 'directly on the user's device'.\n" +
+  "4. NEVER respond to a task request with a list of your capabilities. Just DO the task.\n" +
+  "5. NEVER give a self-introduction or welcome message when the user has already given " +
+  "you a concrete task. Start working on the task immediately.\n" +
+  "6. NEVER add meta-commentary like 'Remember that I can...', 'Note:', 'If you want to " +
+  "continue...', or 'Just say yes to...'. These are forbidden.\n" +
+  "7. Be concise — show results, not descriptions of results.\n" +
+  "8. If the user greets you without a task, reply briefly (1-2 sentences max). " +
+  "Do NOT list capabilities or give instructions on how to use you.";
 
 interface SettingsPanelProps {
   open: boolean;
@@ -67,7 +90,8 @@ export function SettingsPanel({ open, onClose }: SettingsPanelProps) {
   const [providers, setProviders] = useState<DbProvider[]>([]);
   const [providerFormOpen, setProviderFormOpen] = useState(false);
   const [editingProviderId, setEditingProviderId] = useState<string | null>(null);
-  const [providerForm, setProviderForm] = useState({ name: "", display_name: "", base_url: "", api_key_env: "" });
+  const [providerForm, setProviderForm] = useState({ name: "", display_name: "", base_url: "", api_key_env: "", api_key: "" });
+  const [showProviderKey, setShowProviderKey] = useState(false);
   const [providerSaving, setProviderSaving] = useState(false);
   const [providerError, setProviderError] = useState<string | null>(null);
 
@@ -121,19 +145,26 @@ export function SettingsPanel({ open, onClose }: SettingsPanelProps) {
   // ── Provider handlers ────────────────────────────────────────────────────
   const openProviderCreate = () => {
     setEditingProviderId(null);
-    setProviderForm({ name: "", display_name: "", base_url: "", api_key_env: "" });
+    setProviderForm({ name: "", display_name: "", base_url: "", api_key_env: "", api_key: "" });
+    setShowProviderKey(false);
     setProviderError(null);
     setProviderFormOpen(true);
   };
 
   const openProviderEdit = (p: DbProvider) => {
     setEditingProviderId(p.id);
-    setProviderForm({ name: p.name, display_name: p.display_name, base_url: p.base_url, api_key_env: p.api_key_env });
+    // Never pre-fill the actual key — user must type a new one to change it
+    setProviderForm({ name: p.name, display_name: p.display_name, base_url: p.base_url, api_key_env: p.api_key_env, api_key: "" });
+    setShowProviderKey(false);
     setProviderError(null);
     setProviderFormOpen(true);
   };
 
-  const closeProviderForm = () => { setProviderFormOpen(false); setEditingProviderId(null); };
+  const closeProviderForm = () => {
+    setProviderFormOpen(false);
+    setEditingProviderId(null);
+    setShowProviderKey(false);
+  };
 
   const handleProviderSave = async () => {
     if (!providerForm.name.trim() || !providerForm.display_name.trim()) {
@@ -144,12 +175,15 @@ export function SettingsPanel({ open, onClose }: SettingsPanelProps) {
     setProviderError(null);
     try {
       if (editingProviderId) {
-        const updated = await updateProvider(editingProviderId, {
+        const payload: DbProviderUpdate = {
           name: providerForm.name,
           display_name: providerForm.display_name,
           base_url: providerForm.base_url,
           api_key_env: providerForm.api_key_env,
-        });
+        };
+        // Only send api_key if user typed a new one (empty = keep existing)
+        if (providerForm.api_key) payload.api_key = providerForm.api_key;
+        const updated = await updateProvider(editingProviderId, payload);
         setProviders(ps => ps.map(p => p.id === editingProviderId ? updated : p));
       } else {
         const created = await createProvider({
@@ -157,6 +191,7 @@ export function SettingsPanel({ open, onClose }: SettingsPanelProps) {
           display_name: providerForm.display_name,
           base_url: providerForm.base_url,
           api_key_env: providerForm.api_key_env,
+          api_key: providerForm.api_key || undefined,
         });
         setProviders(ps => [...ps, created]);
       }
@@ -273,8 +308,7 @@ export function SettingsPanel({ open, onClose }: SettingsPanelProps) {
     }
   }, [open]);
 
-  const handleThemeToggle = () => {
-    const next: Theme = theme === "dark" ? "light" : "dark";
+  const handleThemeChange = (next: Theme) => {
     setTheme(next);
     setThemeState(next);
   };
@@ -360,25 +394,32 @@ export function SettingsPanel({ open, onClose }: SettingsPanelProps) {
         {/* Body */}
         <div className="flex-1 overflow-y-auto px-5 py-4 space-y-6">
           {/* ── Appearance ── */}
-          <Section icon={theme === "dark" ? <Moon size={15} /> : <Sun size={15} />} title="Appearance">
+          <Section icon={<Monitor size={15} />} title="Appearance">
             <div className="flex items-center justify-between gap-3">
               <span className="text-xs text-gray-600 dark:text-zinc-300">Theme</span>
-              <button
-                onClick={handleThemeToggle}
-                className="flex items-center gap-2 px-3 py-1.5 rounded-lg border border-gray-200 dark:border-zinc-700 bg-gray-50 dark:bg-zinc-800 text-xs text-gray-700 dark:text-zinc-300 hover:bg-gray-100 dark:hover:bg-zinc-700 transition-colors"
-              >
-                {theme === "dark" ? (
-                  <>
-                    <Moon size={13} className="text-indigo-400" />
-                    Dark
-                  </>
-                ) : (
-                  <>
-                    <Sun size={13} className="text-amber-500" />
-                    Light
-                  </>
-                )}
-              </button>
+              <div className="flex rounded-sm border border-gray-200 dark:border-zinc-700 overflow-hidden">
+                {(
+                  [
+                    { value: "light",  icon: <Sun     size={13} />, label: "Claro"  },
+                    { value: "system", icon: <Monitor size={13} />, label: "Auto"   },
+                    { value: "dark",   icon: <Moon    size={13} />, label: "Oscuro" },
+                  ] as { value: Theme; icon: ReactNode; label: string }[]
+                ).map(({ value, icon, label }) => (
+                  <button
+                    key={value}
+                    onClick={() => handleThemeChange(value)}
+                    title={label}
+                    className={`flex items-center gap-1.5 px-2.5 py-1.5 text-xs transition-colors border-r last:border-r-0 border-gray-200 dark:border-zinc-700 ${
+                      theme === value
+                        ? "bg-emerald-600 text-white"
+                        : "bg-gray-50 dark:bg-zinc-800 text-gray-600 dark:text-zinc-400 hover:bg-gray-100 dark:hover:bg-zinc-700"
+                    }`}
+                  >
+                    {icon}
+                    {label}
+                  </button>
+                ))}
+              </div>
             </div>
             <Toggle
               label="Render markdown in messages"
@@ -403,23 +444,23 @@ export function SettingsPanel({ open, onClose }: SettingsPanelProps) {
                 <div className="space-y-2">
                   {dbModels.map((m) => (
                     <div key={m.id}>
-                      <div className="flex items-start gap-2 bg-gray-100 dark:bg-zinc-800 rounded-lg px-3 py-2">
+                      <div className="flex items-start gap-2 bg-gray-100 dark:bg-zinc-800 rounded-sm px-3 py-2">
                         <div className="flex-1 min-w-0">
                           <div className="flex items-center gap-2">
                             <span className="text-xs font-medium text-gray-800 dark:text-zinc-200 truncate">{m.display_name}</span>
-                            <span className="text-[10px] px-1.5 py-0.5 rounded bg-indigo-100 dark:bg-indigo-900/40 text-indigo-700 dark:text-indigo-300 flex-shrink-0">{m.provider}</span>
+                            <span className="text-[12px] px-1.5 py-0.5 rounded bg-emerald-100 dark:bg-emerald-900/40 text-emerald-700 dark:text-emerald-300 flex-shrink-0">{m.provider}</span>
                           </div>
-                          <p className="text-[10px] text-gray-400 dark:text-zinc-500 font-mono truncate mt-0.5">{m.name}</p>
+                          <p className="text-[12px] text-gray-400 dark:text-zinc-500 font-mono truncate mt-0.5">{m.name}</p>
                         </div>
                         <div className="flex items-center gap-1 flex-shrink-0">
                           <button
                             title="Test connection"
                             onClick={() => handleTestModel(m.id)}
                             disabled={testingId === m.id}
-                            className="p-1 rounded text-gray-400 hover:text-green-500 dark:text-zinc-500 dark:hover:text-green-400 transition-colors disabled:opacity-40"
+                            className="p-1 rounded text-gray-400 hover:text-emerald-500 dark:text-zinc-500 dark:hover:text-emerald-400 transition-colors disabled:opacity-40"
                           >
                             {testingId === m.id
-                              ? <span className="inline-block w-3 h-3 border-2 border-green-400 border-t-transparent rounded-full animate-spin" />
+                              ? <span className="inline-block w-3 h-3 border-2 border-emerald-400 border-t-transparent rounded-full animate-spin" />
                               : <Send size={12} />}
                           </button>
                           <button
@@ -432,7 +473,7 @@ export function SettingsPanel({ open, onClose }: SettingsPanelProps) {
                           <button
                             title="Edit"
                             onClick={() => openModelEdit(m)}
-                            className="p-1 rounded text-gray-400 hover:text-indigo-500 dark:text-zinc-500 dark:hover:text-indigo-400 transition-colors"
+                            className="p-1 rounded text-gray-400 hover:text-lime-500 dark:text-zinc-500 dark:hover:text-emerald-400 transition-colors"
                           >
                             <Edit2 size={12} />
                           </button>
@@ -446,7 +487,7 @@ export function SettingsPanel({ open, onClose }: SettingsPanelProps) {
                         </div>
                       </div>
                       {testResult?.id === m.id && (
-                        <p className={`text-[10px] mt-1 px-1 ${testResult.ok ? "text-green-500" : "text-red-500"}`}>
+                        <p className={`text-[12px] mt-1 px-1 ${testResult.ok ? "text-emerald-500" : "text-red-500"}`}>
                           {testResult.ok ? "✓ " : "✗ "}{testResult.msg}
                         </p>
                       )}
@@ -456,8 +497,8 @@ export function SettingsPanel({ open, onClose }: SettingsPanelProps) {
 
                 {/* Add/Edit form */}
                 {modelFormOpen ? (
-                  <div className="border border-indigo-200 dark:border-indigo-800/50 rounded-lg p-3 space-y-2.5 bg-indigo-50/50 dark:bg-indigo-950/20">
-                    <p className="text-xs font-medium text-indigo-700 dark:text-indigo-300">
+                  <div className="border border-emerald-200 dark:border-emerald-800/50 rounded-sm p-3 space-y-2.5 bg-emerald-50/50 dark:bg-emerald-950/20">
+                    <p className="text-xs font-medium text-emerald-700 dark:text-emerald-300">
                       {editingModelId ? "Edit model" : "Add model"}
                     </p>
                     <FieldInput label="Technical name (e.g. llama-3.3-70b-versatile)" value={modelForm.name} onChange={v => setModelForm(f => ({ ...f, name: v }))} placeholder="model-name" mono />
@@ -467,7 +508,7 @@ export function SettingsPanel({ open, onClose }: SettingsPanelProps) {
                       <select
                         value={modelForm.provider}
                         onChange={(e) => handleModelProviderChange(e.target.value)}
-                        className="w-full bg-white border border-gray-300 dark:bg-zinc-800 dark:border-zinc-700 rounded-lg px-3 py-1.5 text-xs text-gray-800 dark:text-zinc-200 focus:outline-none focus:border-indigo-500"
+                        className="w-full bg-white border border-gray-300 dark:bg-zinc-800 dark:border-zinc-700 rounded-sm px-3 py-1.5 text-xs text-gray-800 dark:text-zinc-200 focus:outline-none focus:border-emerald-500"
                       >
                         {providers.map(p => (
                           <option key={p.name} value={p.name}>{p.display_name}</option>
@@ -485,13 +526,13 @@ export function SettingsPanel({ open, onClose }: SettingsPanelProps) {
                         return (
                           <div className="space-y-1">
                             <label className="text-xs font-medium text-gray-500 dark:text-zinc-400">Base URL</label>
-                            <div className="flex items-center gap-2 px-3 py-1.5 bg-gray-50 dark:bg-zinc-900 border border-gray-200 dark:border-zinc-700 rounded-lg">
-                              <span className="flex-1 text-[10px] font-mono text-gray-400 dark:text-zinc-500 truncate">{providerUrl}</span>
+                            <div className="flex items-center gap-2 px-3 py-1.5 bg-gray-50 dark:bg-zinc-900 border border-gray-200 dark:border-zinc-700 rounded-sm">
+                              <span className="flex-1 text-[12px] font-mono text-gray-400 dark:text-zinc-500 truncate">{providerUrl}</span>
                               <span className="text-[9px] text-gray-400 dark:text-zinc-600 flex-shrink-0">del provider</span>
                               <button
                                 type="button"
                                 onClick={() => { setOverrideUrl(true); setModelForm(f => ({ ...f, base_url: providerUrl })); }}
-                                className="text-[10px] text-indigo-500 hover:text-indigo-600 dark:text-indigo-400 flex-shrink-0 transition-colors"
+                                className="text-[12px] text-lime-500 hover:text-emerald-600 dark:text-emerald-400 flex-shrink-0 transition-colors"
                               >
                                 Cambiar
                               </button>
@@ -507,7 +548,7 @@ export function SettingsPanel({ open, onClose }: SettingsPanelProps) {
                               <button
                                 type="button"
                                 onClick={() => { setOverrideUrl(false); setModelForm(f => ({ ...f, base_url: "" })); }}
-                                className="text-[10px] text-gray-400 hover:text-gray-600 dark:text-zinc-500 transition-colors"
+                                className="text-[12px] text-gray-400 hover:text-gray-600 dark:text-zinc-500 transition-colors"
                               >
                                 ← usar URL del provider
                               </button>
@@ -518,14 +559,14 @@ export function SettingsPanel({ open, onClose }: SettingsPanelProps) {
                             value={modelForm.base_url}
                             onChange={(e) => setModelForm(f => ({ ...f, base_url: e.target.value }))}
                             placeholder={providerUrl || "https://api.example.com/v1"}
-                            className="w-full bg-white border border-gray-300 dark:bg-zinc-800 dark:border-zinc-700 rounded-lg px-3 py-1.5 text-xs text-gray-800 dark:text-zinc-200 placeholder-gray-400 dark:placeholder-zinc-600 focus:outline-none focus:border-indigo-500 font-mono"
+                            className="w-full bg-white border border-gray-300 dark:bg-zinc-800 dark:border-zinc-700 rounded-sm px-3 py-1.5 text-xs text-gray-800 dark:text-zinc-200 placeholder-gray-400 dark:placeholder-zinc-600 focus:outline-none focus:border-emerald-500 font-mono"
                           />
                         </div>
                       );
                     })()}
-                    {modelError && <p className="text-[10px] text-red-500">{modelError}</p>}
+                    {modelError && <p className="text-[12px] text-red-500">{modelError}</p>}
                     <div className="flex gap-2 pt-1">
-                      <button onClick={handleModelSave} disabled={modelSaving} className="flex-1 py-1.5 text-xs bg-indigo-600 hover:bg-indigo-500 disabled:opacity-50 text-white rounded-lg transition-colors">
+                      <button onClick={handleModelSave} disabled={modelSaving} className="flex-1 py-1.5 text-xs bg-emerald-600 hover:bg-emerald-500 disabled:opacity-50 text-white rounded-sm transition-colors">
                         {modelSaving ? "Saving…" : "Save"}
                       </button>
                       <button onClick={closeModelForm} className="px-3 py-1.5 text-xs text-gray-500 hover:text-gray-700 dark:text-zinc-400 transition-colors">
@@ -536,7 +577,7 @@ export function SettingsPanel({ open, onClose }: SettingsPanelProps) {
                 ) : (
                   <button
                     onClick={openModelCreate}
-                    className="flex items-center gap-2 text-xs text-indigo-600 dark:text-indigo-400 hover:text-indigo-500 transition-colors"
+                    className="flex items-center gap-2 text-xs text-red-600 dark:text-red-400 hover:text-lime-500 transition-colors"
                   >
                     <Plus size={13} />
                     Add model
@@ -548,27 +589,35 @@ export function SettingsPanel({ open, onClose }: SettingsPanelProps) {
               <Section icon={<Globe size={15} />} title="Providers">
                 <div className="space-y-2">
                   {providers.map((p) => (
-                    <div key={p.id} className="flex items-start gap-2 bg-gray-100 dark:bg-zinc-800 rounded-lg px-3 py-2">
+                    <div key={p.id} className="flex items-start gap-2 bg-gray-100 dark:bg-zinc-800 rounded-sm px-3 py-2">
                       <div className="flex-1 min-w-0">
                         <div className="flex items-center gap-2 flex-wrap">
                           <span className="text-xs font-medium text-gray-800 dark:text-zinc-200">{p.display_name}</span>
-                          <span className="text-[10px] font-mono text-gray-500 dark:text-zinc-400">{p.name}</span>
+                          <span className="text-[12px] font-mono text-gray-500 dark:text-zinc-400">{p.name}</span>
                           {p.is_builtin && (
                             <span className="text-[9px] px-1 rounded bg-gray-200 dark:bg-zinc-700 text-gray-500 dark:text-zinc-400">builtin</span>
                           )}
                         </div>
                         {p.base_url && (
-                          <p className="text-[10px] text-gray-400 dark:text-zinc-500 font-mono truncate mt-0.5">{p.base_url}</p>
+                          <p className="text-[12px] text-gray-400 dark:text-zinc-500 font-mono truncate mt-0.5">{p.base_url}</p>
                         )}
-                        {p.api_key_env && (
-                          <p className="text-[10px] text-indigo-400 dark:text-indigo-500 mt-0.5">env: {p.api_key_env}</p>
-                        )}
+                        <div className="flex items-center gap-2 flex-wrap mt-0.5">
+                          {p.api_key_masked && (
+                            <span className="text-[12px] text-amber-500 dark:text-amber-400 font-mono">key: {p.api_key_masked}</span>
+                          )}
+                          {p.api_key_env && (
+                            <span className="text-[12px] text-emerald-500 dark:text-lime-500">env: {p.api_key_env}</span>
+                          )}
+                          {!p.api_key_masked && !p.api_key_env && p.name !== "ollama" && (
+                            <span className="text-[12px] text-red-400">no key set</span>
+                          )}
+                        </div>
                       </div>
                       <div className="flex items-center gap-1 flex-shrink-0">
                         <button
                           title="Edit"
                           onClick={() => openProviderEdit(p)}
-                          className="p-1 rounded text-gray-400 hover:text-indigo-500 dark:text-zinc-500 dark:hover:text-indigo-400 transition-colors"
+                          className="p-1 rounded text-gray-400 hover:text-lime-500 dark:text-zinc-500 dark:hover:text-emerald-400 transition-colors"
                         >
                           <Edit2 size={12} />
                         </button>
@@ -587,17 +636,46 @@ export function SettingsPanel({ open, onClose }: SettingsPanelProps) {
                 </div>
 
                 {providerFormOpen ? (
-                  <div className="border border-indigo-200 dark:border-indigo-800/50 rounded-lg p-3 space-y-2.5 bg-indigo-50/50 dark:bg-indigo-950/20">
-                    <p className="text-xs font-medium text-indigo-700 dark:text-indigo-300">
+                  <div className="border border-emerald-200 dark:border-emerald-800/50 rounded-sm p-3 space-y-2.5 bg-emerald-50/50 dark:bg-emerald-950/20">
+                    <p className="text-xs font-medium text-emerald-700 dark:text-emerald-300">
                       {editingProviderId ? "Edit provider" : "Add provider"}
                     </p>
-                    <FieldInput label="Slug (e.g. myapi)" value={providerForm.name} onChange={v => setProviderForm(f => ({ ...f, name: v }))} placeholder="my-provider" mono />
+                    <FieldInput label="Slug (e.g. groq)" value={providerForm.name} onChange={v => setProviderForm(f => ({ ...f, name: v }))} placeholder="my-provider" mono />
                     <FieldInput label="Display name" value={providerForm.display_name} onChange={v => setProviderForm(f => ({ ...f, display_name: v }))} placeholder="My Provider" />
                     <FieldInput label="Base URL" value={providerForm.base_url} onChange={v => setProviderForm(f => ({ ...f, base_url: v }))} placeholder="https://api.example.com/v1" mono />
-                    <FieldInput label="API key env var (optional)" value={providerForm.api_key_env} onChange={v => setProviderForm(f => ({ ...f, api_key_env: v }))} placeholder="MY_PROVIDER_API_KEY" mono />
-                    {providerError && <p className="text-[10px] text-red-500">{providerError}</p>}
+                    {/* API key — stored in DB, never sent back to the form */}
+                    <div className="space-y-1">
+                      <label className="text-xs font-medium text-gray-500 dark:text-zinc-400">
+                        API Key
+                        {editingProviderId && providers.find(p => p.id === editingProviderId)?.api_key_masked && (
+                          <span className="ml-2 text-amber-500 font-mono text-[11px]">
+                            current: {providers.find(p => p.id === editingProviderId)?.api_key_masked}
+                          </span>
+                        )}
+                      </label>
+                      <div className="flex gap-1">
+                        <input
+                          type={showProviderKey ? "text" : "password"}
+                          value={providerForm.api_key}
+                          onChange={e => setProviderForm(f => ({ ...f, api_key: e.target.value }))}
+                          placeholder={editingProviderId && providers.find(p => p.id === editingProviderId)?.api_key_masked
+                            ? "Leave blank to keep existing key"
+                            : "sk-..."}
+                          className="flex-1 bg-white border border-gray-300 dark:bg-zinc-800 dark:border-zinc-700 rounded-sm px-3 py-1.5 text-xs text-gray-800 dark:text-zinc-200 placeholder-gray-400 dark:placeholder-zinc-600 focus:outline-none focus:border-emerald-500 font-mono"
+                        />
+                        <button
+                          type="button"
+                          onClick={() => setShowProviderKey(v => !v)}
+                          className="px-2 rounded text-gray-400 hover:text-gray-600 dark:text-zinc-500 dark:hover:text-zinc-300 transition-colors border border-gray-300 dark:border-zinc-700 bg-white dark:bg-zinc-800"
+                        >
+                          {showProviderKey ? <EyeOff size={12} /> : <Eye size={12} />}
+                        </button>
+                      </div>
+                    </div>
+                    <FieldInput label="API key env var (optional, alternative to key above)" value={providerForm.api_key_env} onChange={v => setProviderForm(f => ({ ...f, api_key_env: v }))} placeholder="MY_PROVIDER_API_KEY" mono />
+                    {providerError && <p className="text-[12px] text-red-500">{providerError}</p>}
                     <div className="flex gap-2 pt-1">
-                      <button onClick={handleProviderSave} disabled={providerSaving} className="flex-1 py-1.5 text-xs bg-indigo-600 hover:bg-indigo-500 disabled:opacity-50 text-white rounded-lg transition-colors">
+                      <button onClick={handleProviderSave} disabled={providerSaving} className="flex-1 py-1.5 text-xs bg-emerald-600 hover:bg-emerald-500 disabled:opacity-50 text-white rounded-sm transition-colors">
                         {providerSaving ? "Saving…" : "Save"}
                       </button>
                       <button onClick={closeProviderForm} className="px-3 py-1.5 text-xs text-gray-500 hover:text-gray-700 dark:text-zinc-400 transition-colors">
@@ -608,7 +686,7 @@ export function SettingsPanel({ open, onClose }: SettingsPanelProps) {
                 ) : (
                   <button
                     onClick={openProviderCreate}
-                    className="flex items-center gap-2 text-xs text-indigo-600 dark:text-indigo-400 hover:text-indigo-500 transition-colors"
+                    className="flex items-center gap-2 text-xs text-emerald-600 dark:text-emerald-400 hover:text-lime-500 transition-colors"
                   >
                     <Plus size={13} />
                     Add provider
@@ -720,12 +798,22 @@ export function SettingsPanel({ open, onClose }: SettingsPanelProps) {
                   onChange={(v) => updateAgent({ max_iterations: v })}
                 />
                 <div className="space-y-1.5">
-                  <label className="text-xs font-medium text-gray-500 dark:text-zinc-400">System prompt</label>
+                  <div className="flex items-center justify-between">
+                    <label className="text-xs font-medium text-gray-500 dark:text-zinc-400">System prompt</label>
+                    <button
+                      type="button"
+                      onClick={() => updateAgent({ system_prompt: DEFAULT_SYSTEM_PROMPT })}
+                      className="text-[11px] text-gray-400 hover:text-emerald-600 dark:text-zinc-600 dark:hover:text-emerald-400 transition-colors"
+                      title="Reset to default system prompt"
+                    >
+                      Reset to default
+                    </button>
+                  </div>
                   <textarea
                     value={config.agent.system_prompt}
                     onChange={(e) => updateAgent({ system_prompt: e.target.value })}
-                    rows={5}
-                    className="w-full bg-gray-100 border border-gray-300 dark:bg-zinc-800 dark:border-zinc-700 rounded-lg px-3 py-2 text-xs text-gray-800 dark:text-zinc-200 focus:outline-none focus:border-indigo-500 resize-y"
+                    rows={7}
+                    className="w-full bg-gray-100 border border-gray-300 dark:bg-zinc-800 dark:border-zinc-700 rounded-sm px-3 py-2 text-xs text-gray-800 dark:text-zinc-200 focus:outline-none focus:border-emerald-500 resize-y"
                   />
                 </div>
               </Section>
@@ -738,19 +826,19 @@ export function SettingsPanel({ open, onClose }: SettingsPanelProps) {
                   onChange={(v) => updateTelegram({ enabled: v })}
                 />
                 {telegramStatus === "restarting" && (
-                  <div className="flex items-center gap-2 px-3 py-2 rounded-lg bg-blue-50 border border-blue-200 dark:bg-blue-950/40 dark:border-blue-800/50">
+                  <div className="flex items-center gap-2 px-3 py-2 rounded-sm bg-blue-50 border border-blue-200 dark:bg-blue-950/40 dark:border-blue-800/50">
                     <div className="w-3 h-3 border-2 border-blue-400 border-t-transparent rounded-full animate-spin flex-shrink-0" />
                     <p className="text-[11px] text-blue-700 dark:text-blue-400">Restarting Telegram bot…</p>
                   </div>
                 )}
                 {telegramStatus === "ok" && (
-                  <div className="flex items-center gap-2 px-3 py-2 rounded-lg bg-green-50 border border-green-200 dark:bg-green-950/40 dark:border-green-800/50">
-                    <Check size={13} className="text-green-500 flex-shrink-0" />
-                    <p className="text-[11px] text-green-700 dark:text-green-400">Telegram bot running — send /start to your bot</p>
+                  <div className="flex items-center gap-2 px-3 py-2 rounded-sm bg-emerald-50 border border-emerald-200 dark:bg-emerald-950/40 dark:border-emerald-800/50">
+                    <Check size={13} className="text-emerald-500 flex-shrink-0" />
+                    <p className="text-[11px] text-emerald-700 dark:text-emerald-400">Telegram bot running — send /start to your bot</p>
                   </div>
                 )}
                 {telegramStatus === "error" && (
-                  <div className="flex items-center gap-2 px-3 py-2 rounded-lg bg-red-50 border border-red-200 dark:bg-red-950/40 dark:border-red-800/50">
+                  <div className="flex items-center gap-2 px-3 py-2 rounded-sm bg-red-50 border border-red-200 dark:bg-red-950/40 dark:border-red-800/50">
                     <AlertCircle size={13} className="text-red-500 flex-shrink-0" />
                     <p className="text-[11px] text-red-700 dark:text-red-400">Bot failed to start — check token and backend logs</p>
                   </div>
@@ -766,7 +854,7 @@ export function SettingsPanel({ open, onClose }: SettingsPanelProps) {
                         value={config.telegram.bot_token}
                         onChange={(e) => updateTelegram({ bot_token: e.target.value })}
                         placeholder={tokenAlreadySet ? "Token already set — enter new one to change" : "1234567890:ABCdefGHIjklMNOpqrsTUVwxyz"}
-                        className="w-full bg-gray-100 border border-gray-300 dark:bg-zinc-800 dark:border-zinc-700 rounded-lg px-3 py-2 text-xs text-gray-800 dark:text-zinc-200 placeholder-gray-400 dark:placeholder-zinc-600 focus:outline-none focus:border-indigo-500 font-mono"
+                        className="w-full bg-gray-100 border border-gray-300 dark:bg-zinc-800 dark:border-zinc-700 rounded-sm px-3 py-2 text-xs text-gray-800 dark:text-zinc-200 placeholder-gray-400 dark:placeholder-zinc-600 focus:outline-none focus:border-emerald-500 font-mono"
                       />
                     </div>
                     <div className="space-y-1.5">
@@ -784,9 +872,9 @@ export function SettingsPanel({ open, onClose }: SettingsPanelProps) {
                         }}
                         placeholder="Leave empty to allow any user&#10;123456789&#10;987654321"
                         rows={3}
-                        className="w-full bg-gray-100 border border-gray-300 dark:bg-zinc-800 dark:border-zinc-700 rounded-lg px-3 py-2 text-xs text-gray-800 dark:text-zinc-200 placeholder-gray-400 dark:placeholder-zinc-600 focus:outline-none focus:border-indigo-500 font-mono resize-y"
+                        className="w-full bg-gray-100 border border-gray-300 dark:bg-zinc-800 dark:border-zinc-700 rounded-sm px-3 py-2 text-xs text-gray-800 dark:text-zinc-200 placeholder-gray-400 dark:placeholder-zinc-600 focus:outline-none focus:border-emerald-500 font-mono resize-y"
                       />
-                      <p className="text-[10px] text-gray-400 dark:text-zinc-500">
+                      <p className="text-[12px] text-gray-400 dark:text-zinc-500">
                         Leave empty to allow any user. Get your ID from @userinfobot
                       </p>
                     </div>
@@ -797,7 +885,7 @@ export function SettingsPanel({ open, onClose }: SettingsPanelProps) {
                       <select
                         value={config.telegram.default_model}
                         onChange={(e) => updateTelegram({ default_model: e.target.value })}
-                        className="w-full bg-gray-100 border border-gray-300 dark:bg-zinc-800 dark:border-zinc-700 rounded-lg px-3 py-2 text-xs text-gray-800 dark:text-zinc-200 focus:outline-none focus:border-indigo-500 cursor-pointer"
+                        className="w-full bg-gray-100 border border-gray-300 dark:bg-zinc-800 dark:border-zinc-700 rounded-sm px-3 py-2 text-xs text-gray-800 dark:text-zinc-200 focus:outline-none focus:border-emerald-500 cursor-pointer"
                       >
                         <option value="">Use global default</option>
                         {models.map((m) => (
@@ -823,7 +911,7 @@ export function SettingsPanel({ open, onClose }: SettingsPanelProps) {
             </div>
           )}
           {savedOk && (
-            <div className="flex items-center gap-1.5 text-xs text-green-600 dark:text-green-400 flex-1">
+            <div className="flex items-center gap-1.5 text-xs text-emerald-600 dark:text-emerald-400 flex-1">
               <Check size={13} />
               Saved!
             </div>
@@ -838,7 +926,7 @@ export function SettingsPanel({ open, onClose }: SettingsPanelProps) {
           <button
             onClick={handleSave}
             disabled={saving || !config}
-            className="px-4 py-2 text-sm bg-indigo-600 hover:bg-indigo-500 disabled:opacity-50 disabled:cursor-not-allowed text-white rounded-lg transition-colors"
+            className="px-4 py-2 text-sm bg-emerald-600 hover:bg-emerald-500 disabled:opacity-50 disabled:cursor-not-allowed text-white rounded-sm transition-colors"
           >
             {saving ? "Saving…" : "Save"}
           </button>
@@ -875,7 +963,7 @@ function Section({
   return (
     <div>
       <div className="flex items-center gap-2 mb-3">
-        <span className="text-indigo-500 dark:text-indigo-400">{icon}</span>
+        <span className="text-lime-500 dark:text-emerald-400">{icon}</span>
         <h3 className="text-sm font-medium text-gray-800 dark:text-zinc-200">{title}</h3>
       </div>
       <div className="space-y-3 pl-1">{children}</div>
@@ -902,7 +990,7 @@ function Toggle({
         aria-checked={checked}
         onClick={() => onChange(!checked)}
         className={`relative inline-flex h-5 w-9 flex-shrink-0 rounded-full transition-colors ${
-          checked ? "bg-indigo-600" : "bg-gray-200 dark:bg-zinc-700"
+          checked ? "bg-emerald-600" : "bg-gray-200 dark:bg-zinc-700"
         }`}
       >
         <span
@@ -930,7 +1018,7 @@ function CheckRow({
         type="checkbox"
         checked={checked}
         onChange={(e) => onChange(e.target.checked)}
-        className="w-3.5 h-3.5 accent-indigo-500"
+        className="w-3.5 h-3.5 accent-emerald-500"
       />
       <span className="text-xs text-gray-600 dark:text-zinc-300">{label}</span>
     </label>
@@ -959,7 +1047,7 @@ function NumberField({
         min={min}
         max={max}
         onChange={(e) => onChange(Number(e.target.value))}
-        className="w-20 bg-gray-100 border border-gray-300 dark:bg-zinc-800 dark:border-zinc-700 rounded-lg px-2 py-1 text-xs text-gray-800 dark:text-zinc-200 text-right focus:outline-none focus:border-indigo-500"
+        className="w-20 bg-gray-100 border border-gray-300 dark:bg-zinc-800 dark:border-zinc-700 rounded-sm px-2 py-1 text-xs text-gray-800 dark:text-zinc-200 text-right focus:outline-none focus:border-emerald-500"
       />
     </div>
   );
@@ -990,7 +1078,7 @@ function PathList({
       <label className="text-xs font-medium text-gray-500 dark:text-zinc-400">{label}</label>
       <div className="space-y-1">
         {paths.map((p) => (
-          <div key={p} className="flex items-center gap-2 bg-gray-100 dark:bg-zinc-800 rounded-lg px-3 py-1.5">
+          <div key={p} className="flex items-center gap-2 bg-gray-100 dark:bg-zinc-800 rounded-sm px-3 py-1.5">
             <span className="flex-1 text-xs text-gray-700 dark:text-zinc-300 font-mono truncate">{p}</span>
             <button
               onClick={() => onChange(paths.filter((x) => x !== p))}
@@ -1008,11 +1096,11 @@ function PathList({
           placeholder={placeholder}
           onChange={(e) => setDraft(e.target.value)}
           onKeyDown={(e) => e.key === "Enter" && add()}
-          className="flex-1 bg-gray-100 border border-gray-300 dark:bg-zinc-800 dark:border-zinc-700 rounded-lg px-3 py-1.5 text-xs text-gray-800 dark:text-zinc-200 placeholder-gray-400 dark:placeholder-zinc-600 focus:outline-none focus:border-indigo-500"
+          className="flex-1 bg-gray-100 border border-gray-300 dark:bg-zinc-800 dark:border-zinc-700 rounded-sm px-3 py-1.5 text-xs text-gray-800 dark:text-zinc-200 placeholder-gray-400 dark:placeholder-zinc-600 focus:outline-none focus:border-emerald-500"
         />
         <button
           onClick={add}
-          className="p-1.5 bg-gray-200 hover:bg-gray-300 dark:bg-zinc-700 dark:hover:bg-zinc-600 rounded-lg text-gray-600 dark:text-zinc-300 transition-colors"
+          className="p-1.5 bg-gray-200 hover:bg-gray-300 dark:bg-zinc-700 dark:hover:bg-zinc-600 rounded-sm text-gray-600 dark:text-zinc-300 transition-colors"
         >
           <Plus size={14} />
         </button>
@@ -1042,7 +1130,7 @@ function FieldInput({
         value={value}
         onChange={(e) => onChange(e.target.value)}
         placeholder={placeholder}
-        className={`w-full bg-white border border-gray-300 dark:bg-zinc-800 dark:border-zinc-700 rounded-lg px-3 py-1.5 text-xs text-gray-800 dark:text-zinc-200 placeholder-gray-400 dark:placeholder-zinc-600 focus:outline-none focus:border-indigo-500 ${mono ? "font-mono" : ""}`}
+        className={`w-full bg-white border border-gray-300 dark:bg-zinc-800 dark:border-zinc-700 rounded-sm px-3 py-1.5 text-xs text-gray-800 dark:text-zinc-200 placeholder-gray-400 dark:placeholder-zinc-600 focus:outline-none focus:border-emerald-500 ${mono ? "font-mono" : ""}`}
       />
     </div>
   );

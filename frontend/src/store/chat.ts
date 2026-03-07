@@ -70,7 +70,11 @@ export const useChatStore = create<ChatState>((set, get) => ({
 
   loadConversations: async () => {
     const conversations = await listConversations();
-    set({ conversations });
+    const { activeConvId } = get();
+    // If the active conversation is no longer in the DB (e.g. DB was reset or
+    // branch was switched), clear the stale ID so the next message auto-creates one.
+    const stillExists = activeConvId && conversations.some(c => c.id === activeConvId);
+    set({ conversations, ...(activeConvId && !stillExists ? { activeConvId: null, messages: [] } : {}) });
   },
 
   loadModels: async () => {
@@ -248,7 +252,26 @@ export const useChatStore = create<ChatState>((set, get) => ({
           return { messages: msgs, isLoading: false, stopStream: null };
         });
       },
-      (msg: string) => {
+      async (msg: string) => {
+        // If the conversation was deleted/lost, create a fresh one silently
+        if (msg.includes("Conversation not found") || msg.includes("404")) {
+          const { selectedModel } = get();
+          try {
+            const newConv = await createConversation(selectedModel);
+            set(s => ({
+              conversations: [newConv, ...s.conversations],
+              activeConvId: newConv.id,
+              messages: [],
+              isLoading: false,
+              error: null,
+              stopStream: null,
+            }));
+            // Don't auto-retry — let the user resend to avoid infinite loops
+          } catch {
+            set({ isLoading: false, error: "No se pudo crear una nueva conversación.", stopStream: null });
+          }
+          return;
+        }
         set({ isLoading: false, error: msg, stopStream: null });
       }
     );

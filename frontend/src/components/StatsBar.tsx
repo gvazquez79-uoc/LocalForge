@@ -45,7 +45,7 @@ function StatRow({
 function barColor(percent: number): string {
   if (percent >= 90) return "bg-red-500";
   if (percent >= 70) return "bg-yellow-400";
-  return "bg-indigo-500";
+  return "bg-emerald-500";
 }
 
 // ── Ollama model row ──────────────────────────────────────────────────────────
@@ -57,7 +57,7 @@ function processorLabel(gpuPct: number): string {
 }
 
 function processorColor(gpuPct: number): string {
-  if (gpuPct >= 80) return "text-green-500 dark:text-green-400";
+  if (gpuPct >= 80) return "text-emerald-500 dark:text-emerald-400";
   if (gpuPct >= 30) return "text-yellow-500 dark:text-yellow-400";
   return "text-red-500 dark:text-red-400";
 }
@@ -69,7 +69,7 @@ function OllamaRow({ model }: { model: OllamaModel }) {
 
   return (
     <div className="flex items-start gap-1.5 py-0.5">
-      <BrainCircuit size={11} className="text-indigo-400 dark:text-indigo-500 mt-0.5 flex-shrink-0" />
+      <BrainCircuit size={11} className="text-emerald-400 dark:text-lime-500 mt-0.5 flex-shrink-0" />
       <div className="flex-1 min-w-0">
         <div className="flex items-baseline gap-1 min-w-0">
           <span className="text-[10px] font-medium text-gray-600 dark:text-zinc-300 truncate">{shortName}</span>
@@ -161,7 +161,7 @@ export function StatsBar() {
       {stats.ollama_models.length > 0 && (
         <div className="border-t border-gray-200 dark:border-zinc-800 mt-0.5 pt-1.5 flex flex-col gap-0.5">
           <div className="flex items-center gap-1 mb-0.5">
-            <BrainCircuit size={10} className="text-indigo-400 dark:text-indigo-500" />
+            <BrainCircuit size={10} className="text-emerald-400 dark:text-lime-500" />
             <span className="text-[9px] uppercase tracking-wide text-gray-400 dark:text-zinc-600 font-medium">Ollama</span>
           </div>
           {stats.ollama_models.map((m) => (

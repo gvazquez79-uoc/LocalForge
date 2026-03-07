@@ -73,12 +73,27 @@ async def create_model(
                 (model_id, name, display_name, provider, api_key or None, base_url or None, 1 if is_default else 0),
             )
             await db.commit()
+            # SELECT within the same connection so the row is guaranteed visible
+            cursor = await db.execute("SELECT * FROM models WHERE id = ?", (model_id,))
+            row = await cursor.fetchone()
+    except ValueError:
+        raise
     except Exception as exc:
         msg = str(exc)
         if "1062" in msg or "UNIQUE" in msg.upper() or "unique" in msg:
             raise ValueError(f"Ya existe un modelo con el nombre '{name}'. Usa un nombre diferente.") from exc
         raise
-    row = await _fetch_by_id(model_id)
+    if row is None:
+        # Fallback: build the dict from the known values if the SELECT still fails
+        return {
+            "id": model_id,
+            "name": name,
+            "display_name": display_name,
+            "provider": provider,
+            "api_key_masked": _mask_key(api_key),
+            "base_url": base_url or None,
+            "is_default": is_default,
+        }
     return _row_to_dict_masked(row)
 
 
@@ -120,9 +135,11 @@ async def update_model(
              new_base_url or None, new_is_default, model_id),
         )
         await db.commit()
+        # SELECT within the same connection so the updated row is guaranteed visible
+        cursor = await db.execute("SELECT * FROM models WHERE id = ?", (model_id,))
+        row = await cursor.fetchone()
 
-    row = await _fetch_by_id(model_id)
-    return _row_to_dict_masked(row)
+    return _row_to_dict_masked(row) if row else None
 
 
 async def delete_model(model_id: str) -> bool:
@@ -140,7 +157,9 @@ async def set_default_model(model_id: str) -> Optional[dict]:
     async with get_db() as db:
         await db.execute("UPDATE models SET is_default = 1 WHERE id = ?", (model_id,))
         await db.commit()
-    row = await _fetch_by_id(model_id)
+        # SELECT within the same connection so the updated row is guaranteed visible
+        cursor = await db.execute("SELECT * FROM models WHERE id = ?", (model_id,))
+        row = await cursor.fetchone()
     return _row_to_dict_masked(row) if row else None
 
 

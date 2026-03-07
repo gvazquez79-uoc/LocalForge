@@ -143,6 +143,23 @@ async def approve_tool(conv_id: str, body: ApproveRequest):
     return {"ok": True, "approved": body.approved}
 
 
+async def _generate_title(model_name: str, user_message: str) -> str:
+    """Generate a short conversation title using the model. Returns empty string on failure."""
+    try:
+        title_adapter = get_adapter(model_name)
+        title_msg = [{"role": "user", "content": TITLE_PROMPT + f"\n\nUser message: {user_message}"}]
+        title_text = ""
+        async for event in title_adapter.stream_chat(title_msg, [], ""):
+            if event.type == "text_delta":
+                title_text += event.data["text"]
+        candidate = title_text.strip().strip('"').split('\n')[0][:50]
+        if len(candidate) >= 3 and candidate.lower() not in ("false", "none", "null", "error", "ok"):
+            return candidate
+    except Exception:
+        pass
+    return ""
+
+
 @router.post("/{conv_id}/chat")
 async def send_message(conv_id: str, body: SendMessageRequest):
     conv = await get_conversation(conv_id)
@@ -174,9 +191,19 @@ async def send_message(conv_id: str, body: SendMessageRequest):
     adapter = get_adapter(model_name)
 
     async def event_stream() -> AsyncIterator[str]:
+        import asyncio as _asyncio
+
         full_text = ""
         tool_events = []
-        title_generated = False
+
+        # Fire title generation IN PARALLEL with the agent response so it
+        # doesn't add extra latency — by the time the model finishes, the
+        # title is usually already ready.
+        title_task: "_asyncio.Task[str] | None" = None
+        if is_first_message:
+            title_task = _asyncio.create_task(
+                _generate_title(model_name, body.content)
+            )
 
         async for event in run_agent(messages, adapter):
             payload = json.dumps({"type": event.type, "data": event.data})
@@ -186,24 +213,6 @@ async def send_message(conv_id: str, body: SendMessageRequest):
                 full_text += event.data["text"]
             elif event.type == "tool_call":
                 tool_events.append(event.data)
-            elif event.type == "done" and is_first_message and not title_generated:
-                title_generated = True
-                try:
-                    title_adapter = get_adapter(model_name)
-                    title_msg = [{"role": "user", "content": TITLE_PROMPT + f"\n\nUser message: {body.content}"}]
-                    title_text = ""
-                    async for title_event in title_adapter.stream_chat(title_msg, [], ""):
-                        if title_event.type == "text_delta":
-                            title_text += title_event.data["text"]
-                    if title_text.strip():
-                        clean_title = title_text.strip().strip('"').split('\n')[0][:50]
-                        if clean_title and len(clean_title) >= 3 and clean_title.lower() not in (
-                            "false", "none", "null", "error", "ok"
-                        ):
-                            await update_conversation_title(conv_id, clean_title)
-                            yield f"data: {json.dumps({'type': 'title_updated', 'data': {'title': clean_title}})}\n\n"
-                except Exception:
-                    pass  # Silently fail title generation
 
         # Persist assistant message
         if full_text:
@@ -213,6 +222,16 @@ async def send_message(conv_id: str, body: SendMessageRequest):
                 full_text,
                 metadata={"tool_calls": tool_events} if tool_events else None,
             )
+
+        # Collect title result (should already be done; 5s fallback timeout)
+        if title_task:
+            try:
+                clean_title = await _asyncio.wait_for(title_task, timeout=5.0)
+                if clean_title:
+                    await update_conversation_title(conv_id, clean_title)
+                    yield f"data: {json.dumps({'type': 'title_updated', 'data': {'title': clean_title}})}\n\n"
+            except Exception:
+                pass
 
         yield "data: [DONE]\n\n"
 

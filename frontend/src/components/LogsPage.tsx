@@ -156,13 +156,13 @@ export function LogsPage() {
       {/* ── Header ────────────────────────────────────────────────────────── */}
       <header className="flex-shrink-0 flex items-center gap-3 px-4 py-3
                          bg-zinc-900 border-b border-zinc-800 shadow-md">
-        <Hammer size={18} className="text-indigo-400" />
+        <Hammer size={18} className="text-emerald-400" />
         <span className="text-sm font-semibold tracking-tight text-zinc-100">
           LocalForge — App Logs
         </span>
 
         {/* Connection status */}
-        <span className={`flex items-center gap-1.5 text-[11px] ml-1 ${connected ? "text-green-400" : "text-red-400"}`}>
+        <span className={`flex items-center gap-1.5 text-[11px] ml-1 ${connected ? "text-emerald-400" : "text-red-400"}`}>
           {connected
             ? <><Wifi size={12} /><span>Live</span></>
             : <><WifiOff size={12} /><span>Disconnected</span></>}
@@ -179,9 +179,9 @@ export function LogsPage() {
         <button
           onClick={() => setPaused(p => !p)}
           title={paused ? "Resume" : "Pause"}
-          className={`flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-[11px] transition-colors
+          className={`flex items-center gap-1.5 px-2.5 py-1 rounded-sm text-[11px] transition-colors
                       ${paused
-                        ? "bg-amber-600/30 text-amber-300 hover:bg-amber-600/50"
+                        ? "bg-emerald-600/30 text-amber-300 hover:bg-emerald-600/50"
                         : "bg-zinc-800 text-zinc-400 hover:bg-zinc-700 hover:text-zinc-200"}`}
         >
           {paused ? <><Play size={11} /> Resume</> : <><Pause size={11} /> Pause</>}
@@ -191,7 +191,7 @@ export function LogsPage() {
         <button
           onClick={clearLog}
           title="Clear"
-          className="flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-[11px]
+          className="flex items-center gap-1.5 px-2.5 py-1 rounded-sm text-[11px]
                      bg-zinc-800 text-zinc-400 hover:bg-zinc-700 hover:text-red-400 transition-colors"
         >
           <Trash2 size={11} /> Clear
@@ -207,9 +207,9 @@ export function LogsPage() {
             <button
               key={f.value}
               onClick={() => setFilter(f.value)}
-              className={`px-2.5 py-1 rounded-lg text-[11px] font-medium transition-colors ${
+              className={`px-2.5 py-1 rounded-sm text-[11px] font-medium transition-colors ${
                 filter === f.value
-                  ? "bg-indigo-600 text-white"
+                  ? "bg-emerald-600 text-white"
                   : "bg-zinc-800 text-zinc-400 hover:bg-zinc-700 hover:text-zinc-200"
               }`}
             >
@@ -221,7 +221,7 @@ export function LogsPage() {
         <div className="w-px h-4 bg-zinc-700 mx-1" />
 
         {/* Search */}
-        <div className="flex items-center gap-2 flex-1 bg-zinc-800 rounded-lg px-3 py-1.5 max-w-xs">
+        <div className="flex items-center gap-2 flex-1 bg-zinc-800 rounded-sm px-3 py-1.5 max-w-xs">
           <Search size={11} className="text-zinc-500 shrink-0" />
           <input
             value={search}
@@ -289,8 +289,8 @@ export function LogsPage() {
         <div className="flex-shrink-0 flex justify-center py-2 bg-zinc-900/80 border-t border-zinc-800">
           <button
             onClick={scrollToBottom}
-            className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-[11px]
-                       bg-indigo-600/30 text-indigo-300 hover:bg-indigo-600/50 transition-colors"
+            className="flex items-center gap-1.5 px-3 py-1.5 rounded-sm text-[11px]
+                       bg-emerald-600/30 text-emerald-300 hover:bg-emerald-600/50 transition-colors"
           >
             <ChevronDown size={12} /> Jump to latest
           </button>

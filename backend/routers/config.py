@@ -82,36 +82,21 @@ async def read_config():
 
 @router.get("/models")
 async def list_models():
+    """Return only explicitly configured models (from DB).
+    Ollama auto-discovery is handled by GET /config/models/discover."""
     cfg = get_config()
 
-    # Find Ollama base_url from first ollama model in config
-    ollama_base_url = "http://localhost:11434/v1"
-    for m in cfg.models:
-        if m.provider == "ollama" and m.base_url:
-            ollama_base_url = m.base_url
-            break
-
-    # Auto-discover Ollama models
-    ollama_models = await _discover_ollama_models(ollama_base_url)
-    ollama_names = {m["name"] for m in ollama_models}
-
-    # Non-Ollama models from config (Claude, OpenAI, etc.)
-    other_models = [
+    all_models = [
         {
             "name": m.name,
             "display_name": m.display_name,
             "provider": m.provider,
-            "available": bool(cfg.get_model_api_key(m)),
-            "base_url": m.base_url,
+            # Ollama models never need a key; others need one to be available
+            "available": m.provider == "ollama" or bool(cfg.get_model_api_key(m)),
         }
         for m in cfg.models
-        if m.provider != "ollama" and m.name not in ollama_names
     ]
 
-    all_models = ollama_models + other_models
-
-    # Determine which model to use as default
-    # Priority: config default_model → first available ollama → first available
     default = cfg.default_model
     available_names = {m["name"] for m in all_models if m["available"]}
     if default not in available_names and available_names:
@@ -121,6 +106,24 @@ async def list_models():
         "models": all_models,
         "default_model": default,
     }
+
+
+@router.get("/models/discover")
+async def discover_models():
+    """Auto-discover Ollama models running locally.
+    Returns all discovered models plus whether each is already configured in DB."""
+    cfg = get_config()
+    configured_names = {m.name for m in cfg.models}
+
+    # Resolve Ollama base URL from providers table
+    from backend.models.registry import _PROVIDER_DEFAULTS
+    ollama_base_url = _PROVIDER_DEFAULTS.get("ollama", "http://localhost:11434/v1")
+
+    ollama_models = await _discover_ollama_models(ollama_base_url)
+    return [
+        {**m, "already_configured": m["name"] in configured_names}
+        for m in ollama_models
+    ]
 
 
 @router.put("")

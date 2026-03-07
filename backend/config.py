@@ -52,9 +52,23 @@ class ToolsConfig(BaseModel):
 class AgentConfig(BaseModel):
     max_iterations: int = 20
     system_prompt: str = (
-        "You are LocalForge, a helpful AI assistant with access to the local file "
-        "system, terminal, and web search. Always be precise when working with files "
-        "and commands. Ask for confirmation before destructive operations."
+        "You are LocalForge, an AI agent that uses tools to interact with the user's computer.\n\n"
+        "CRITICAL RULES — follow these exactly, without exception:\n"
+        "1. When the user asks you to DO something (list files, read a file, run a command, "
+        "search the web), call the appropriate tool IMMEDIATELY. Never just describe what you "
+        "would do — actually do it.\n"
+        "2. NEVER say 'I can...', 'I have access to...', 'I can list...', 'I can read...' "
+        "without IMMEDIATELY calling a tool to prove it.\n"
+        "3. You are an AI model running via API. Do not claim to be a 'local model' or claim "
+        "to run 'directly on the user's device'.\n"
+        "4. NEVER respond to a task request with a list of your capabilities. Just DO the task.\n"
+        "5. NEVER give a self-introduction or welcome message when the user has already given "
+        "you a concrete task. Start working on the task immediately.\n"
+        "6. NEVER add meta-commentary like 'Remember that I can...', 'Note:', 'If you want to "
+        "continue...', or 'Just say yes to...'. These are forbidden.\n"
+        "7. Be concise — show results, not descriptions of results.\n"
+        "8. If the user greets you without a task, reply briefly (1-2 sentences max). "
+        "Do NOT list capabilities or give instructions on how to use you."
     )
 
 
@@ -80,13 +94,17 @@ class LocalForgeConfig(BaseModel):
         return None
 
     def get_model_api_key(self, model: ModelConfig) -> Optional[str]:
-        # 1. Explicit key stored in DB
+        # 1. Explicit key stored in DB on the model itself (override)
         if model.api_key:
             return model.api_key
-        # 2. Explicit env-var name configured
+        # 2. Provider's direct API key stored in DB
+        provider_key = _PROVIDER_KEYS.get(model.provider)
+        if provider_key:
+            return provider_key
+        # 3. Explicit env-var name configured on the model
         if model.api_key_env:
             return os.environ.get(model.api_key_env)
-        # 3. Auto-detect from standard env var for known providers
+        # 4. Auto-detect from standard env var for known providers
         env_var = _PROVIDER_ENV_VARS.get(model.provider)
         if env_var:
             return os.environ.get(env_var)
@@ -121,6 +139,10 @@ _PROVIDER_ENV_VARS: dict[str, str] = {
     "deepseek":   "DEEPSEEK_API_KEY",
     "together":   "TOGETHER_API_KEY",
 }
+
+# Direct API keys stored in DB per provider.
+# Populated from DB at startup via refresh_providers_cache().
+_PROVIDER_KEYS: dict[str, str] = {}
 
 # ── Singleton loaders ─────────────────────────────────────────────────────────
 
@@ -226,7 +248,7 @@ async def refresh_providers_cache() -> None:
     """Load providers from DB and update the in-memory caches used by
     get_model_api_key() and registry.get_adapter().
     Called at startup and after any provider CRUD operation."""
-    global _PROVIDER_ENV_VARS
+    global _PROVIDER_ENV_VARS, _PROVIDER_KEYS
     try:
         from backend.db.providers_store import get_provider_map
         pmap = await get_provider_map()
@@ -235,6 +257,12 @@ async def refresh_providers_cache() -> None:
             name: info["api_key_env"]
             for name, info in pmap.items()
             if info.get("api_key_env")
+        }
+        # Update direct API keys from DB
+        _PROVIDER_KEYS = {
+            name: info["api_key"]
+            for name, info in pmap.items()
+            if info.get("api_key")
         }
         # Update provider base-URL defaults in the model registry
         from backend.models.registry import update_provider_defaults

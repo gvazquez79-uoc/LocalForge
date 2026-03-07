@@ -59,7 +59,7 @@ export function ConfirmationModal({ confirmation, onApprove, onReject }: Confirm
           <span className="font-semibold">Confirmation Required</span>
           <button
             onClick={onReject}
-            className="ml-auto p-1 hover:bg-black/10 rounded-lg"
+            className="ml-auto p-1 hover:bg-black/10 rounded-sm"
           >
             <X className="w-4 h-4" />
           </button>
@@ -67,7 +67,7 @@ export function ConfirmationModal({ confirmation, onApprove, onReject }: Confirm
 
         {/* Content */}
         <div className="p-4">
-          <pre className="text-sm text-gray-700 dark:text-gray-300 whitespace-pre-wrap font-mono bg-gray-50 dark:bg-zinc-800 p-3 rounded-lg max-h-48 overflow-y-auto">
+          <pre className="text-sm text-gray-700 dark:text-gray-300 whitespace-pre-wrap font-mono bg-gray-50 dark:bg-zinc-800 p-3 rounded-sm max-h-48 overflow-y-auto">
             {confirmation.message}
           </pre>
         </div>
@@ -77,7 +77,7 @@ export function ConfirmationModal({ confirmation, onApprove, onReject }: Confirm
           <button
             onClick={onReject}
             disabled={loading}
-            className="flex-1 flex items-center justify-center gap-2 px-4 py-2 rounded-lg border border-gray-300 dark:border-zinc-600 text-gray-700 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-zinc-700 transition-colors"
+            className="flex-1 flex items-center justify-center gap-2 px-4 py-2 rounded-sm border border-gray-300 dark:border-zinc-600 text-gray-700 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-zinc-700 transition-colors"
           >
             <X className="w-4 h-4" />
             Cancel
@@ -85,7 +85,7 @@ export function ConfirmationModal({ confirmation, onApprove, onReject }: Confirm
           <button
             onClick={handleApprove}
             disabled={loading}
-            className="flex-1 flex items-center justify-center gap-2 px-4 py-2 rounded-lg bg-red-600 hover:bg-red-500 text-white transition-colors"
+            className="flex-1 flex items-center justify-center gap-2 px-4 py-2 rounded-sm bg-red-600 hover:bg-red-500 text-white transition-colors"
           >
             <Check className="w-4 h-4" />
             {loading ? "Executing..." : "Execute"}

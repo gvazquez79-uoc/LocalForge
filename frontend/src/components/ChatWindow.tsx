@@ -218,9 +218,9 @@ export function ChatWindow() {
     >
       {/* Drag overlay */}
       {isDragging && (
-        <div className="absolute inset-0 z-40 bg-indigo-500/20 border-4 border-dashed border-indigo-500 rounded-none flex items-center justify-center pointer-events-none">
+        <div className="absolute inset-0 z-40 bg-emerald-500/20 border-4 border-dashed border-emerald-500 rounded-none flex items-center justify-center pointer-events-none">
           <div className="bg-white dark:bg-zinc-800 px-6 py-4 rounded-xl shadow-xl flex items-center gap-3">
-            <Upload className="w-8 h-8 text-indigo-500" />
+            <Upload className="w-8 h-8 text-lime-500" />
             <div>
               <p className="font-semibold text-gray-900 dark:text-zinc-100">Suelta aquí</p>
               <p className="text-xs text-gray-500 dark:text-zinc-400 mt-0.5">
@@ -260,7 +260,7 @@ export function ChatWindow() {
         <div className="px-4 pb-2 flex flex-wrap gap-2">
           {/* Text file chips */}
           {attachments.map((att, i) => (
-            <div key={`txt-${i}`} className="flex items-center gap-2 px-3 py-1.5 bg-gray-100 dark:bg-zinc-800 rounded-lg text-sm">
+            <div key={`txt-${i}`} className="flex items-center gap-2 px-3 py-1.5 bg-gray-100 dark:bg-zinc-800 rounded-sm text-sm">
               <File className="w-4 h-4 text-gray-500 flex-shrink-0" />
               <span className="max-w-[140px] truncate">{att.name}</span>
               <button onClick={() => removeAttachment(i)} className="p-0.5 hover:bg-gray-200 dark:hover:bg-zinc-700 rounded">
@@ -272,7 +272,7 @@ export function ChatWindow() {
           {/* Image thumbnails + PDF chips */}
           {binaryAttachments.map((att, i) =>
             att.isPdf ? (
-              <div key={`pdf-${i}`} className="flex items-center gap-2 px-3 py-1.5 bg-red-50 dark:bg-red-950/40 border border-red-200 dark:border-red-800 rounded-lg text-sm">
+              <div key={`pdf-${i}`} className="flex items-center gap-2 px-3 py-1.5 bg-red-50 dark:bg-red-950/40 border border-red-200 dark:border-red-800 rounded-sm text-sm">
                 <FileText className="w-4 h-4 text-red-500 flex-shrink-0" />
                 <span className="max-w-[140px] truncate text-red-700 dark:text-red-300">{att.name}</span>
                 <button onClick={() => removeBinaryAttachment(i)} className="p-0.5 hover:bg-red-100 dark:hover:bg-red-900 rounded">
@@ -280,7 +280,7 @@ export function ChatWindow() {
                 </button>
               </div>
             ) : (
-              <div key={`img-${i}`} className="relative group rounded-lg overflow-hidden border border-gray-200 dark:border-zinc-700 flex-shrink-0">
+              <div key={`img-${i}`} className="relative group rounded-sm overflow-hidden border border-gray-200 dark:border-zinc-700 flex-shrink-0">
                 <img src={att.dataUrl} alt={att.name} className="h-16 w-16 object-cover" title={att.name} />
                 <button
                   onClick={() => removeBinaryAttachment(i)}
@@ -325,7 +325,7 @@ export function ChatWindow() {
                 : "Escribe a LocalForge… (Enter para enviar, Shift+Enter para nueva línea)"
             }
             rows={1}
-            className="flex-1 resize-none bg-gray-100 border border-gray-300 dark:bg-zinc-800 dark:border-zinc-700 rounded-xl px-4 py-3 text-sm text-gray-900 dark:text-zinc-100 placeholder-gray-400 dark:placeholder-zinc-500 focus:outline-none focus:border-indigo-500 transition-colors"
+            className="flex-1 resize-none bg-gray-100 border border-gray-300 dark:bg-zinc-800 dark:border-zinc-700 rounded-xl px-4 py-3 text-sm text-gray-900 dark:text-zinc-100 placeholder-gray-400 dark:placeholder-zinc-500 focus:outline-none focus:border-emerald-500 transition-colors"
             style={{ minHeight: "44px", maxHeight: "200px" }}
           />
 
@@ -338,7 +338,7 @@ export function ChatWindow() {
               <StopCircle size={18} />
             </button>
           ) : (
-            <button onClick={handleSend} disabled={!canSend} className="p-3 bg-indigo-600 hover:bg-indigo-500 disabled:opacity-40 disabled:cursor-not-allowed rounded-xl text-white transition-colors" title="Enviar">
+            <button onClick={handleSend} disabled={!canSend} className="p-3 bg-emerald-600 hover:bg-emerald-500 disabled:opacity-40 disabled:cursor-not-allowed rounded-xl text-white transition-colors" title="Enviar">
               <Send size={18} />
             </button>
           )}

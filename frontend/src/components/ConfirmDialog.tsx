@@ -100,7 +100,7 @@ export function ConfirmDialog({
           </span>
           <button
             onClick={onCancel}
-            className="shrink-0 p-1 rounded-lg text-gray-500 hover:text-gray-700 dark:hover:text-gray-300
+            className="shrink-0 p-1 rounded-sm text-gray-500 hover:text-gray-700 dark:hover:text-gray-300
                        hover:bg-black/10 dark:hover:bg-white/10 transition-colors"
             aria-label="Close"
           >
@@ -115,7 +115,7 @@ export function ConfirmDialog({
           </p>
           {detail && (
             <p className="text-xs font-mono bg-gray-100 dark:bg-zinc-800 text-gray-600 dark:text-gray-400
-                          px-3 py-2 rounded-lg truncate">
+                          px-3 py-2 rounded-sm truncate">
               {detail}
             </p>
           )}

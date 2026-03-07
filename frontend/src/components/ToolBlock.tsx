@@ -22,7 +22,7 @@ export function ToolBlock({ tool, result }: ToolBlockProps) {
   const icon = TOOL_ICONS[tool.name] ?? <Terminal size={14} />;
 
   return (
-    <div className="my-2 rounded-lg border border-gray-200 bg-gray-50 dark:border-zinc-700 dark:bg-zinc-900 text-sm overflow-hidden">
+    <div className="my-2 rounded-sm border border-gray-200 bg-gray-50 dark:border-zinc-700 dark:bg-zinc-900 text-sm overflow-hidden">
       <button
         onClick={() => setOpen((v) => !v)}
         className="flex w-full items-center gap-2 px-3 py-2 text-left text-gray-500 hover:bg-gray-100 dark:text-zinc-400 dark:hover:bg-zinc-800 transition-colors"

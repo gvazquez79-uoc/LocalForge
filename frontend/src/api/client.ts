@@ -21,13 +21,17 @@ function authHeaders(): Record<string, string> {
   return key ? { "X-API-Key": key } : {};
 }
 
+export type AuthCheckResult = "ok" | "auth_required" | "offline";
+
 /** Check if the current key is valid (or if auth is disabled on the server) */
-export async function checkAuth(): Promise<boolean> {
+export async function checkAuth(): Promise<AuthCheckResult> {
   try {
     const res = await fetch(`${BASE}/health`, { headers: authHeaders() });
-    return res.ok; // 200 = ok, 401 = wrong key
+    if (res.ok) return "ok";
+    if (res.status === 401) return "auth_required";
+    return "offline"; // unexpected server error
   } catch {
-    return false; // backend offline
+    return "offline"; // backend not reachable
   }
 }
 
@@ -210,6 +214,21 @@ export async function listModels(): Promise<ModelsResponse> {
   return res.json();
 }
 
+export interface DiscoveredModel {
+  name: string;
+  display_name: string;
+  provider: string;
+  available: boolean;
+  base_url: string;
+  already_configured: boolean;
+}
+
+export async function discoverOllamaModels(): Promise<DiscoveredModel[]> {
+  const res = await fetch(`${BASE}/config/models/discover`, { headers: authHeaders() });
+  if (!res.ok) throw new Error(await res.text());
+  return res.json();
+}
+
 // ── DB Models (CRUD) ──────────────────────────────────────────────────────────
 
 export interface DbModel {
@@ -305,7 +324,24 @@ export interface DbProvider {
   display_name: string;
   base_url: string;
   api_key_env: string;
+  api_key_masked: string | null;  // e.g. "****abcd" — null if no key set
   is_builtin: boolean;
+}
+
+export interface DbProviderCreate {
+  name: string;
+  display_name: string;
+  base_url?: string;
+  api_key_env?: string;
+  api_key?: string;
+}
+
+export interface DbProviderUpdate {
+  name?: string;
+  display_name?: string;
+  base_url?: string;
+  api_key_env?: string;
+  api_key?: string;  // empty string = keep existing key unchanged
 }
 
 export async function listProviders(): Promise<DbProvider[]> {
@@ -314,7 +350,7 @@ export async function listProviders(): Promise<DbProvider[]> {
   return res.json();
 }
 
-export async function createProvider(data: { name: string; display_name: string; base_url?: string; api_key_env?: string }): Promise<DbProvider> {
+export async function createProvider(data: DbProviderCreate): Promise<DbProvider> {
   const res = await fetch(`${BASE}/providers`, {
     method: "POST",
     headers: { "Content-Type": "application/json", ...authHeaders() },
@@ -324,7 +360,7 @@ export async function createProvider(data: { name: string; display_name: string;
   return res.json();
 }
 
-export async function updateProvider(id: string, data: Partial<{ name: string; display_name: string; base_url: string; api_key_env: string }>): Promise<DbProvider> {
+export async function updateProvider(id: string, data: DbProviderUpdate): Promise<DbProvider> {
   const res = await fetch(`${BASE}/providers/${id}`, {
     method: "PUT",
     headers: { "Content-Type": "application/json", ...authHeaders() },

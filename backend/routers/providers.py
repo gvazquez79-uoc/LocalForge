@@ -23,6 +23,7 @@ class ProviderCreate(BaseModel):
     display_name: str
     base_url: str = ""
     api_key_env: str = ""
+    api_key: str = ""
 
 
 class ProviderUpdate(BaseModel):
@@ -30,6 +31,7 @@ class ProviderUpdate(BaseModel):
     display_name: Optional[str] = None
     base_url: Optional[str] = None
     api_key_env: Optional[str] = None
+    api_key: Optional[str] = None  # None = keep existing; "" = keep existing; non-empty = update
 
 
 @router.get("/providers")
@@ -46,6 +48,7 @@ async def api_create_provider(body: ProviderCreate):
             display_name=body.display_name,
             base_url=body.base_url,
             api_key_env=body.api_key_env,
+            api_key=body.api_key,
         )
     except ValueError as exc:
         raise HTTPException(status_code=409, detail=str(exc))
@@ -62,6 +65,7 @@ async def api_update_provider(provider_id: str, body: ProviderUpdate):
         display_name=body.display_name,
         base_url=body.base_url,
         api_key_env=body.api_key_env,
+        api_key=body.api_key,
     )
     if provider is None:
         raise HTTPException(status_code=404, detail="Provider not found")
