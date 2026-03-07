@@ -120,6 +120,21 @@ app.include_router(stats_router,     prefix="/api")
 app.include_router(logs_router,      prefix="/api")
 
 
+@app.post("/api/dev/restart")
+async def dev_restart():
+    """Restart the backend — touches main.py so uvicorn --reload picks it up."""
+    import asyncio
+    from pathlib import Path
+
+    async def _touch():
+        await asyncio.sleep(0.2)
+        p = Path(__file__)
+        p.touch()
+
+    asyncio.create_task(_touch())
+    return {"ok": True, "message": "Restarting…"}
+
+
 @app.get("/api/health")
 async def health():
     from backend.db.connection import get_db, is_mysql

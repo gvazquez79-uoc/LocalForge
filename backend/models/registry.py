@@ -47,7 +47,11 @@ def _get_ollama_base_url(cfg: LocalForgeConfig) -> str:
 
 def get_adapter(model_name: str | None = None, config: LocalForgeConfig | None = None) -> BaseModelAdapter:
     cfg = config or get_config()
-    name = model_name or cfg.default_model
+    name = (model_name or cfg.default_model).strip()
+
+    import logging
+    logging.getLogger(__name__).info(f"get_adapter called: model_name={model_name!r} → name={name!r}")
+
     model_cfg = cfg.get_model(name)
 
     # ── Model explicitly configured in localforge.json ────────────────────────
@@ -62,7 +66,17 @@ def get_adapter(model_name: str | None = None, config: LocalForgeConfig | None =
                 )
             return AnthropicAdapter(model_name=name, api_key=api_key)
 
-        # Any OpenAI-compatible provider (ollama, openai, groq, openrouter, etc.)
+        # Ollama → use native /api/chat adapter (avoids empty-response bug in /v1/chat/completions)
+        if model_cfg.provider == "ollama":
+            from backend.models.ollama_native import OllamaNativeAdapter
+            base_url = (
+                model_cfg.base_url
+                or _PROVIDER_DEFAULTS.get("ollama")
+                or _get_ollama_base_url(cfg)
+            )
+            return OllamaNativeAdapter(model_name=name, base_url=base_url)
+
+        # Any other OpenAI-compatible provider (openai, groq, openrouter, etc.)
         from backend.models.openai_compat import OpenAICompatAdapter
 
         # Resolve base_url: explicit config > known provider defaults > Ollama fallback
@@ -71,11 +85,10 @@ def get_adapter(model_name: str | None = None, config: LocalForgeConfig | None =
             or _PROVIDER_DEFAULTS.get(model_cfg.provider)
             or _get_ollama_base_url(cfg)
         )
-        # Ollama doesn't need a real key
-        effective_key = api_key or ("ollama" if model_cfg.provider == "ollama" else "no-key")
+        effective_key = api_key or "no-key"
         return OpenAICompatAdapter(model_name=name, base_url=base_url, api_key=effective_key)
 
     # ── Model not in config → assume it's an Ollama model discovered at runtime ─
-    from backend.models.openai_compat import OpenAICompatAdapter
+    from backend.models.ollama_native import OllamaNativeAdapter
     ollama_url = _get_ollama_base_url(cfg)
-    return OpenAICompatAdapter(model_name=name, base_url=ollama_url, api_key="ollama")
+    return OllamaNativeAdapter(model_name=name, base_url=ollama_url)

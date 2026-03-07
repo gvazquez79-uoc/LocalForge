@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { Plus, Trash2, MessageSquare, Hammer, Settings, Pencil, Database, ScrollText, Bug, Radar, Check, X, Loader } from "lucide-react";
+import { Plus, Trash2, MessageSquare, Hammer, Settings, Pencil, Database, ScrollText, Bug, Radar, Check, X, Loader, RefreshCw } from "lucide-react";
 import { useChatStore } from "../store/chat";
 import { ModelSelector } from "./ModelSelector";
 import { StatsBar } from "./StatsBar";
@@ -274,18 +274,42 @@ export function Sidebar({ onSettings }: SidebarProps) {
 
         {/* App logs button — only visible in dev mode */}
         {devMode && (
-          <button
-            onClick={() => window.open("/logs", "_blank")}
-            className="flex items-center gap-2 w-full px-3 py-2 rounded-sm
-                       text-amber-600 dark:text-amber-400 hover:bg-amber-50 dark:hover:bg-amber-950/30
-                       text-sm transition-colors"
-          >
-            <ScrollText size={15} />
-            View app logs
-          </button>
+          <>
+            <button
+              onClick={() => window.open("/logs", "_blank")}
+              className="flex items-center gap-2 w-full px-3 py-2 rounded-sm
+                         text-amber-600 dark:text-amber-400 hover:bg-amber-50 dark:hover:bg-amber-950/30
+                         text-sm transition-colors"
+            >
+              <ScrollText size={15} />
+              View app logs
+            </button>
+            <DevRestartButtons />
+          </>
         )}
       </div>
     </aside>
+  );
+}
+
+function DevRestartButtons() {
+  const handleRestartFrontend = () => {
+    window.location.href = window.location.href;
+  };
+
+  return (
+    <div className="flex gap-1.5 px-3 pt-1">
+      <button
+        onClick={handleRestartFrontend}
+        title="Reload frontend"
+        className="flex items-center gap-1.5 flex-1 justify-center px-2 py-1.5 rounded-sm text-xs
+                   text-amber-600 dark:text-amber-400 border border-amber-200 dark:border-amber-800
+                   hover:bg-amber-50 dark:hover:bg-amber-950/30 transition-colors"
+      >
+        <RefreshCw size={12} />
+        Reload UI
+      </button>
+    </div>
   );
 }
 
