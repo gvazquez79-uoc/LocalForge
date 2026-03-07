@@ -226,8 +226,12 @@ export const useChatStore = create<ChatState>((set, get) => ({
 
           const updated = { ...last };
 
-          if (event.type === "warning") {
-            updated.content += `\n\n> ${(event.data as { message: string }).message}`;
+          if (event.type === "clear_content") {
+            // Model gave a bad response (capability list), correction injected silently.
+            // Reset the bubble so the next iteration starts clean.
+            updated.content = "";
+            updated.toolCalls = [];
+            updated.toolResults = {};
           } else if (event.type === "text_delta") {
             updated.content += (event.data as { text: string }).text;
           } else if (event.type === "tool_call") {
@@ -253,25 +257,41 @@ export const useChatStore = create<ChatState>((set, get) => ({
         });
       },
       async (msg: string) => {
-        // If the conversation was deleted/lost, create a fresh one silently
+        // Always stop the streaming indicator on error — prevent eternal bouncing dots
+        set(s => {
+          const msgs = [...s.messages];
+          const last = msgs[msgs.length - 1];
+          if (last?.role === "assistant" && last.isStreaming) {
+            msgs[msgs.length - 1] = { ...last, isStreaming: false };
+          }
+          return { messages: msgs };
+        });
+
+        // If the conversation was not found in DB, create a fresh one and
+        // retry automatically (root cause: MySQL stale snapshot in pool).
+        // We keep the user's message visible and remove only the empty
+        // assistant bubble so the retry starts with a clean slate.
         if (msg.includes("Conversation not found") || msg.includes("404")) {
-          const { selectedModel } = get();
+          const { selectedModel: curModel } = get();
           try {
-            const newConv = await createConversation(selectedModel);
+            const newConv = await createConversation(curModel);
             set(s => ({
               conversations: [newConv, ...s.conversations],
               activeConvId: newConv.id,
-              messages: [],
+              // Remove the failed (empty) assistant bubble but keep the user message
+              messages: s.messages.filter(m => m.id !== assistantMsg.id),
               isLoading: false,
               error: null,
               stopStream: null,
             }));
-            // Don't auto-retry — let the user resend to avoid infinite loops
+            // Retry: store now has the new activeConvId
+            get().sendMessage(content, images);
           } catch {
             set({ isLoading: false, error: "No se pudo crear una nueva conversación.", stopStream: null });
           }
           return;
         }
+
         set({ isLoading: false, error: msg, stopStream: null });
       }
     );

@@ -6,6 +6,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import re
 from pathlib import Path
 from typing import AsyncIterator
 
@@ -106,25 +107,16 @@ _HALLUCINATION_PATTERNS = [
     "puedo ejecutar comandos",
     "puedo leer tus archivos",
     "puedo acceder a tu",
-    # Self-introduction + capability list without doing anything (ES)
+    # Self-introduction + capability menu (only triggers when user sent a task request)
     "soy localforge",
-    "estoy listo para ayudarte",
-    "estoy aquí para ayudarte",
     "analizar archivos y directorios",
     "ejecutar comandos en terminal",
     "buscar información en internet",
-    "ayudar con código",
-    "¿qué necesitas hacer",
-    "que necesitas hacer",
     "recuerda que puedo",
     "nota: si quieres continuar",
     "si quieres continuar con algo",
     "solo dime \"si\"",
     "solo dime 'si'",
-    "¿en qué puedo ayudarte hoy",
-    "en qué puedo ayudarte hoy",
-    "¿qué quieres que haga hoy",
-    "qué quieres que haga hoy",
     "especializado en tareas técnicas",
     "asistente de ia especializado",
     # Promising capability without doing it (EN)
@@ -137,13 +129,9 @@ _HALLUCINATION_PATTERNS = [
     "i can execute commands",
     "i run directly on",
     "i'm a local",
-    # Self-introduction + capability list without doing anything (EN)
+    # Self-introduction + capability menu (EN)
     "i'm localforge",
     "i am localforge",
-    "i'm ready to help you",
-    "i'm here to help you",
-    "what do you need today",
-    "what would you like me to do today",
     "analyze files and directories",
     "execute terminal commands",
     "remember, i can",
@@ -152,10 +140,89 @@ _HALLUCINATION_PATTERNS = [
 ]
 
 
+_THINK_RE = re.compile(r"<think>.*?</think>", re.DOTALL | re.IGNORECASE)
+
+
+def strip_thinking(text: str) -> str:
+    """Remove <think>...</think> blocks (reasoning tokens from qwen3 and similar models)."""
+    return _THINK_RE.sub("", text).strip()
+
+
 def _detect_hallucinated_action(text: str) -> bool:
-    """Return True if the model claims to have taken an action without calling a tool."""
-    lower = text.lower()
+    """Return True if the model claims to have taken an action without calling a tool.
+    Thinking tokens (<think>...</think>) are stripped first to avoid false positives."""
+    lower = strip_thinking(text).lower()
     return any(pattern in lower for pattern in _HALLUCINATION_PATTERNS)
+
+
+# Action verbs that indicate the user is requesting something to be done
+_TASK_VERBS_ES = [
+    "lista", "listar", "muestra", "mostrar", "abre", "abrir", "lee", "leer",
+    "ejecuta", "ejecutar", "corre", "busca", "buscar", "crea", "crear",
+    "escribe", "escribir", "borra", "borrar", "elimina", "descarga", "descubrir",
+    "encuentra", "analiza", "dame", "dime", "haz ", "hazme", "pon ", "instala",
+    "configura", "cambia", "comprueba", "revisa", "explica", "genera",
+]
+_TASK_VERBS_EN = [
+    "list ", "show ", "open ", "read ", "execute", "run ", "search", "create",
+    "write", "delete", "remove", "download", "find ", "analyze", "explain",
+    "give me", "tell me", "make ", "install", "configure", "check ", "generate",
+    "get ", "fetch", "scan",
+]
+
+
+def _last_user_message(messages: list[dict]) -> str:
+    """Extract the text of the last real user message (skip injected [SYSTEM] corrections)."""
+    for msg in reversed(messages):
+        if msg.get("role") != "user":
+            continue
+        content = msg.get("content", "")
+        if isinstance(content, str):
+            if content.startswith("[SYSTEM]"):
+                continue
+            return content.lower()
+        if isinstance(content, list):
+            text = " ".join(
+                b.get("text", "") for b in content if isinstance(b, dict)
+            ).lower()
+            if text.startswith("[system]"):
+                continue
+            return text
+    return ""
+
+
+def _is_task_request(messages: list[dict]) -> bool:
+    """Return True if the last user message looks like an actionable task (not a greeting)."""
+    text = _last_user_message(messages)
+    if not text:
+        return False
+    return any(v in text for v in _TASK_VERBS_ES + _TASK_VERBS_EN)
+
+
+# Patterns that indicate the user is asking ABOUT capabilities, not requesting a task.
+# These take precedence over _is_task_request so "Explícame qué puedes hacer" does NOT
+# trigger hallucination detection on a legitimate capabilities description.
+_CAPABILITY_INQUIRY_ES = [
+    "qué puedes", "que puedes", "qué puedes hacer", "que puedes hacer",
+    "para qué sirves", "para que sirves", "cómo puedes ayudarme", "como puedes ayudarme",
+    "qué eres", "que eres", "cuáles son tus", "cuales son tus",
+    "qué herramientas", "que herramientas", "tus capacidades", "tus funciones",
+    "qué funciones", "que funciones", "qué herramientas tienes", "que herramientas tienes",
+]
+_CAPABILITY_INQUIRY_EN = [
+    "what can you", "what do you", "what are you", "what are your",
+    "what tools", "your capabilities", "your tools", "what's your", "what is your",
+    "how can you help", "how can you",
+]
+
+
+def _is_capability_inquiry(messages: list[dict]) -> bool:
+    """Return True if the user is asking ABOUT capabilities (not requesting a task to be done).
+    Prevents false-positive hallucination detection on legitimate capability descriptions."""
+    text = _last_user_message(messages)
+    if not text:
+        return False
+    return any(p in text for p in _CAPABILITY_INQUIRY_ES + _CAPABILITY_INQUIRY_EN)
 
 
 def _requires_confirmation(tool_name: str, tool_input: dict) -> bool:
@@ -210,6 +277,7 @@ async def run_agent(
     system = cfg.agent.system_prompt + _load_memory()
     working_messages = list(messages)
     max_iter = cfg.agent.max_iterations
+    hallucination_corrections = 0  # Limit corrections to 1 per turn to avoid loops
 
     for iteration in range(max_iter):
         yield StreamEvent(type="iteration", data={"n": iteration + 1})
@@ -265,9 +333,16 @@ async def run_agent(
             working_messages.append(assistant_msg)
 
         if not tool_calls:
-            # Detect if the model claimed to do something without calling a tool,
-            # or promised capability without demonstrating it.
-            if assistant_text and _detect_hallucinated_action(assistant_text):
+            # Detect hallucinated actions only when the user actually requested a task
+            # (not a greeting, not a capability inquiry) and only once per turn.
+            if (
+                hallucination_corrections < 1
+                and assistant_text
+                and _is_task_request(working_messages)
+                and not _is_capability_inquiry(working_messages)
+                and _detect_hallucinated_action(assistant_text)
+            ):
+                hallucination_corrections += 1
                 correction = (
                     "[SYSTEM] You described having capabilities or claimed to take an action, "
                     "but you did NOT call any tool. You MUST call the appropriate tool RIGHT NOW. "
@@ -276,12 +351,11 @@ async def run_agent(
                     "If they asked to run a command, call execute_command(). "
                     "Call the tool NOW."
                 )
-                yield StreamEvent(
-                    type="warning",
-                    data={"message": "⚠️ El modelo describió capacidades sin llamar a ninguna herramienta. Solicitando que actúe..."},
-                )
+                # Inject correction silently — no warning shown in the chat UI.
+                # Tell the frontend to discard the text streamed so far (the capability list)
+                # so the next iteration's response starts clean.
+                yield StreamEvent(type="clear_content", data={})
                 working_messages.append({"role": "user", "content": correction})
-                # Continue to next iteration so the model actually calls the tool
                 continue
             return
 

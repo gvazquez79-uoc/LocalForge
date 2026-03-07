@@ -130,6 +130,15 @@ async def get_db():
                 except Exception:
                     await conn.rollback()
                     raise
+                else:
+                    # Always commit on clean exit so the connection is returned to the
+                    # pool with a fresh transaction state.  Without this, MySQL
+                    # REPEATABLE READ keeps a snapshot from the *first* read of the
+                    # current transaction, which means a pooled connection that ran a
+                    # SELECT earlier would NOT see rows committed by other connections
+                    # (e.g. a just-created conversation).  An explicit commit resets the
+                    # snapshot so the next caller always sees the latest committed data.
+                    await conn.commit()
     else:
         import aiosqlite
         async with aiosqlite.connect(str(DB_PATH)) as conn:

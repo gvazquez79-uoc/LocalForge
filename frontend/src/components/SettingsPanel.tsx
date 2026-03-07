@@ -18,6 +18,7 @@ import {
   Star,
   Eye,
   EyeOff,
+  Paperclip,
 } from "lucide-react";
 import {
   getConfig, saveConfig, restartTelegramBot,
@@ -34,23 +35,19 @@ import type { ConfirmDialogOptions } from "./ConfirmDialog";
 
 // Must stay in sync with AgentConfig.system_prompt default in backend/config.py
 const DEFAULT_SYSTEM_PROMPT =
-  "You are LocalForge, an AI agent that uses tools to interact with the user's computer.\n\n" +
-  "CRITICAL RULES — follow these exactly, without exception:\n" +
-  "1. When the user asks you to DO something (list files, read a file, run a command, " +
-  "search the web), call the appropriate tool IMMEDIATELY. Never just describe what you " +
-  "would do — actually do it.\n" +
-  "2. NEVER say 'I can...', 'I have access to...', 'I can list...', 'I can read...' " +
-  "without IMMEDIATELY calling a tool to prove it.\n" +
-  "3. You are an AI model running via API. Do not claim to be a 'local model' or claim " +
-  "to run 'directly on the user's device'.\n" +
-  "4. NEVER respond to a task request with a list of your capabilities. Just DO the task.\n" +
-  "5. NEVER give a self-introduction or welcome message when the user has already given " +
-  "you a concrete task. Start working on the task immediately.\n" +
-  "6. NEVER add meta-commentary like 'Remember that I can...', 'Note:', 'If you want to " +
-  "continue...', or 'Just say yes to...'. These are forbidden.\n" +
-  "7. Be concise — show results, not descriptions of results.\n" +
-  "8. If the user greets you without a task, reply briefly (1-2 sentences max). " +
-  "Do NOT list capabilities or give instructions on how to use you.";
+  "Eres LocalForge, un asistente de IA con acceso a herramientas que te permiten trabajar " +
+  "directamente con el ordenador del usuario.\n\n" +
+  "Tus herramientas:\n" +
+  "- **Sistema de archivos** — listar directorios, leer, escribir y buscar archivos\n" +
+  "- **Terminal** — ejecutar comandos y scripts de shell\n" +
+  "- **Búsqueda web** — buscar información actualizada en internet\n" +
+  "- **Visión** — analizar imágenes y documentos PDF\n\n" +
+  "Cómo comportarte:\n" +
+  "- Cuando el usuario te pida hacer algo, llama a la herramienta apropiada directamente. " +
+  "No anuncies lo que vas a hacer — simplemente hazlo.\n" +
+  "- Sé útil, directo y conciso. Muestra resultados reales, no descripciones de lo que harás.\n" +
+  "- Si te preguntan qué puedes hacer, explica tus herramientas de forma breve y natural.\n" +
+  "- Para conversación casual o saludos, responde con naturalidad sin listar capacidades.";
 
 interface SettingsPanelProps {
   open: boolean;
@@ -326,6 +323,11 @@ export function SettingsPanel({ open, onClose }: SettingsPanelProps) {
   const updateWebSearch = (patch: Partial<LocalForgeConfig["tools"]["web_search"]>) =>
     setConfig((c) =>
       c ? { ...c, tools: { ...c.tools, web_search: { ...c.tools.web_search, ...patch } } } : c
+    );
+
+  const updateAttachments = (patch: Partial<LocalForgeConfig["tools"]["attachments"]>) =>
+    setConfig((c) =>
+      c ? { ...c, tools: { ...c.tools, attachments: { ...c.tools.attachments, ...patch } } } : c
     );
 
   const updateAgent = (patch: Partial<LocalForgeConfig["agent"]>) =>
@@ -737,6 +739,34 @@ export function SettingsPanel({ open, onClose }: SettingsPanelProps) {
                     />
                   </>
                 )}
+              </Section>
+
+              {/* ── Adjuntos ── */}
+              <Section icon={<Paperclip size={15} />} title="Adjuntos (chat)">
+                <p className="text-[11px] text-gray-400 dark:text-zinc-500">
+                  Tamaño máximo de los archivos que puedes adjuntar a los mensajes del chat.
+                </p>
+                <NumberField
+                  label="Imágenes (MB)"
+                  value={config.tools.attachments?.max_image_mb ?? 5}
+                  min={1}
+                  max={100}
+                  onChange={(v) => updateAttachments({ max_image_mb: v })}
+                />
+                <NumberField
+                  label="PDFs (MB)"
+                  value={config.tools.attachments?.max_pdf_mb ?? 25}
+                  min={1}
+                  max={200}
+                  onChange={(v) => updateAttachments({ max_pdf_mb: v })}
+                />
+                <NumberField
+                  label="Archivos de texto (KB)"
+                  value={config.tools.attachments?.max_text_kb ?? 512}
+                  min={64}
+                  max={10240}
+                  onChange={(v) => updateAttachments({ max_text_kb: v })}
+                />
               </Section>
 
               {/* ── Terminal ── */}

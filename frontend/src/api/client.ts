@@ -79,7 +79,7 @@ export interface ModelInfo {
 }
 
 export interface StreamEvent {
-  type: "text_delta" | "tool_call" | "tool_result" | "iteration" | "done" | "error" | "warning" | "title_updated" | "tool_confirmation_needed";
+  type: "text_delta" | "tool_call" | "tool_result" | "iteration" | "done" | "error" | "warning" | "title_updated" | "tool_confirmation_needed" | "clear_content";
   data: Record<string, unknown>;
 }
 
@@ -161,6 +161,11 @@ export interface LocalForgeConfig {
     web_search: {
       enabled: boolean;
       max_results: number;
+    };
+    attachments: {
+      max_image_mb: number;
+      max_pdf_mb: number;
+      max_text_kb: number;
     };
   };
   agent: {

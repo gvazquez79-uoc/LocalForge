@@ -39,9 +39,25 @@ async def lifespan(app: FastAPI):
 
     # Init settings table and load non-model config from DB
     # (seeds DB from localforge.json on first run)
-    from backend.db.settings_store import init_settings_table
+    from backend.db.settings_store import init_settings_table, save_app_config
     await init_settings_table()
     await refresh_config_from_db()
+
+    # ── System-prompt migration ────────────────────────────────────────────
+    # Replace any known legacy system prompts with the current default.
+    # User-customised prompts that don't contain these markers are untouched.
+    from backend.config import get_config, AgentConfig
+    _cfg = get_config()
+    _LEGACY_MARKERS = [
+        "NEVER say 'I can...', 'I have access to...'",  # v1 — overly restrictive
+        "RULES — follow these exactly:",                 # v2 — still rule-heavy
+        "You are LocalForge, a helpful AI assistant",   # v3 — english version
+    ]
+    if any(m in _cfg.agent.system_prompt for m in _LEGACY_MARKERS):
+        import logging as _logging
+        _logging.info("Migrating outdated system prompt to current default.")
+        _cfg.agent.system_prompt = AgentConfig().system_prompt
+        await save_app_config(_cfg.model_dump(exclude={"models"}))
 
     # Init providers table and seed builtins on first run
     from backend.db.providers_store import init_providers_table, seed_providers

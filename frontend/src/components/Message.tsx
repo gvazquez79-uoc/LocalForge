@@ -1,7 +1,7 @@
-import { useMemo } from "react";
+import { useMemo, useState } from "react";
 import type { UIMessage } from "../store/chat";
 import { ToolBlock } from "./ToolBlock";
-import { Bot, User, FileText } from "lucide-react";
+import { Bot, User, FileText, ChevronDown, ChevronRight, BrainCircuit } from "lucide-react";
 import DOMPurify from "dompurify";
 import { marked } from "marked";
 import { usePrefs } from "../store/prefs";
@@ -93,17 +93,43 @@ if (typeof window !== "undefined" && !window.codeCopyHandlers) {
   });
 }
 
+/** Strip / split <think> tokens from model output. */
+function parseThinking(raw: string): { main: string; isThinking: boolean } {
+  // Remove all complete <think>...</think> blocks
+  let main = raw.replace(/<think>[\s\S]*?<\/think>/gi, "").trim();
+  // Detect unclosed <think> (model is still streaming thoughts)
+  const openIdx = main.indexOf("<think>");
+  const isThinking = openIdx !== -1;
+  if (isThinking) main = main.slice(0, openIdx).trim();
+  return { main, isThinking };
+}
+
 export function Message({ message }: MessageProps) {
   const isUser = message.role === "user";
   const { renderMarkdown, showToolCalls } = usePrefs();
+  const [thinkExpanded, setThinkExpanded] = useState(false);
+
+  // Parse thinking tokens out of the content
+  const { main: visibleContent, isThinking } = useMemo(
+    () => parseThinking(message.content ?? ""),
+    [message.content]
+  );
+
+  // Extract thinking text for optional display (collapsed by default)
+  const thinkingText = useMemo(() => {
+    const parts: string[] = [];
+    const re = /<think>([\s\S]*?)<\/think>/gi;
+    let m: RegExpExecArray | null;
+    while ((m = re.exec(message.content ?? "")) !== null) parts.push(m[1].trim());
+    return parts.join("\n\n");
+  }, [message.content]);
 
   const html = useMemo(() => {
-    if (!message.content || !renderMarkdown || message.isStreaming) return null;
-    
+    if (!visibleContent || !renderMarkdown || message.isStreaming) return null;
     const renderer = createRenderer();
-    const rawHtml = marked.parse(message.content, { renderer }) as string;
+    const rawHtml = marked.parse(visibleContent, { renderer }) as string;
     return DOMPurify.sanitize(rawHtml);
-  }, [message.content, message.isStreaming, renderMarkdown]);
+  }, [visibleContent, message.isStreaming, renderMarkdown]);
 
   return (
     <div className={`flex gap-3 ${isUser ? "flex-row-reverse" : "flex-row"} mb-6`}>
@@ -148,7 +174,32 @@ export function Message({ message }: MessageProps) {
           </div>
         )}
 
-        {(message.content || message.isStreaming) && (
+        {/* Thinking indicator — shown while model is reasoning (<think> not yet closed) */}
+        {!isUser && message.isStreaming && isThinking && (
+          <div className="flex items-center gap-2 px-3 py-2 rounded-xl text-xs text-zinc-500 dark:text-zinc-400 bg-zinc-100 dark:bg-zinc-800/60 border border-zinc-200 dark:border-zinc-700">
+            <BrainCircuit size={13} className="animate-pulse text-violet-500" />
+            <span>Pensando…</span>
+          </div>
+        )}
+
+        {/* Collapsed thinking block — shown after model finishes thinking */}
+        {!isUser && !message.isStreaming && thinkingText && (
+          <button
+            onClick={() => setThinkExpanded(v => !v)}
+            className="flex items-center gap-1.5 text-xs text-zinc-400 dark:text-zinc-500 hover:text-violet-500 transition-colors"
+          >
+            {thinkExpanded ? <ChevronDown size={12} /> : <ChevronRight size={12} />}
+            <BrainCircuit size={12} />
+            <span>{thinkExpanded ? "Ocultar razonamiento" : "Ver razonamiento"}</span>
+          </button>
+        )}
+        {!isUser && thinkExpanded && thinkingText && (
+          <div className="text-xs text-zinc-400 dark:text-zinc-500 bg-zinc-50 dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-700 rounded-xl px-3 py-2 whitespace-pre-wrap font-mono leading-relaxed max-h-48 overflow-y-auto">
+            {thinkingText}
+          </div>
+        )}
+
+        {(visibleContent || (message.isStreaming && !isThinking)) && (
           <div
             className={`px-4 py-3 rounded-2xl text-sm leading-relaxed ${
               isUser
@@ -156,7 +207,7 @@ export function Message({ message }: MessageProps) {
                 : "bg-gray-100 text-gray-900 rounded-tl-sm dark:bg-zinc-800 dark:text-zinc-100"
             }`}
           >
-            {message.isStreaming && !message.content ? (
+            {message.isStreaming && !visibleContent ? (
               <span className="inline-flex gap-1">
                 <span className="animate-bounce delay-0">.</span>
                 <span className="animate-bounce delay-100">.</span>
@@ -165,10 +216,10 @@ export function Message({ message }: MessageProps) {
             ) : html ? (
               <div className="prose-chat" dangerouslySetInnerHTML={{ __html: html }} />
             ) : (
-              <div className="whitespace-pre-wrap font-sans break-words">{message.content}</div>
+              <div className="whitespace-pre-wrap font-sans break-words">{visibleContent}</div>
             )}
 
-            {message.isStreaming && message.content && (
+            {message.isStreaming && visibleContent && (
               <span className="inline-block w-0.5 h-4 bg-gray-400 dark:bg-zinc-400 animate-pulse ml-0.5 align-text-bottom" />
             )}
           </div>

@@ -2,6 +2,7 @@ import { useEffect, useRef, useState, useCallback } from "react";
 import { Send, StopCircle, AlertCircle, X, Upload, File, XCircle, FileText, Paperclip } from "lucide-react";
 import { useChatStore } from "../store/chat";
 import type { ImagePayload } from "../store/chat";
+import { getConfig } from "../api/client";
 import { Message } from "./Message";
 import { ConfirmationModal } from "./ConfirmationModal";
 
@@ -20,9 +21,10 @@ interface BinaryAttachment {
   isPdf: boolean;
 }
 
-const MAX_FILE_SIZE   = 512 * 1024;       // 512 KB – text files
-const MAX_IMAGE_SIZE  = 5  * 1024 * 1024; // 5 MB  – images
-const MAX_PDF_SIZE    = 10 * 1024 * 1024; // 10 MB – PDFs
+// Attachment size limits — loaded from backend config on mount; these are the defaults.
+const DEFAULT_MAX_IMAGE_BYTES = 5  * 1024 * 1024;
+const DEFAULT_MAX_PDF_BYTES   = 25 * 1024 * 1024;
+const DEFAULT_MAX_TEXT_BYTES  = 512 * 1024;
 
 const SUPPORTED_IMAGE_TYPES = ["image/jpeg", "image/png", "image/gif", "image/webp"];
 
@@ -69,6 +71,24 @@ export function ChatWindow() {
   const fileInputRef = useRef<HTMLInputElement>(null);
   const dragCounter = useRef(0);
 
+  // Attachment size limits — loaded from backend config; fall back to defaults if unavailable
+  const [maxImageBytes, setMaxImageBytes] = useState(DEFAULT_MAX_IMAGE_BYTES);
+  const [maxPdfBytes,   setMaxPdfBytes]   = useState(DEFAULT_MAX_PDF_BYTES);
+  const [maxTextBytes,  setMaxTextBytes]  = useState(DEFAULT_MAX_TEXT_BYTES);
+
+  useEffect(() => {
+    getConfig()
+      .then(cfg => {
+        const att = cfg.tools?.attachments;
+        if (att) {
+          setMaxImageBytes(att.max_image_mb * 1024 * 1024);
+          setMaxPdfBytes  (att.max_pdf_mb   * 1024 * 1024);
+          setMaxTextBytes (att.max_text_kb  * 1024);
+        }
+      })
+      .catch(() => { /* keep defaults */ });
+  }, []);
+
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [messages]);
@@ -106,15 +126,24 @@ export function ChatWindow() {
 
     for (const file of files) {
       if (isImageFile(file)) {
-        if (file.size > MAX_IMAGE_SIZE) { errors.push(`"${file.name}" — demasiado grande (máx 5 MB)`); continue; }
+        if (file.size > maxImageBytes) {
+          errors.push(`"${file.name}" — demasiado grande (máx ${maxImageBytes / 1024 / 1024} MB)`);
+          continue;
+        }
         try { newBinary.push(await readBinaryFile(file)); }
         catch { errors.push(`"${file.name}" — no se pudo leer`); }
       } else if (isPdfFile(file)) {
-        if (file.size > MAX_PDF_SIZE) { errors.push(`"${file.name}" — demasiado grande (máx 10 MB)`); continue; }
+        if (file.size > maxPdfBytes) {
+          errors.push(`"${file.name}" — demasiado grande (máx ${maxPdfBytes / 1024 / 1024} MB)`);
+          continue;
+        }
         try { newBinary.push(await readBinaryFile(file)); }
         catch { errors.push(`"${file.name}" — no se pudo leer`); }
       } else if (isTextFile(file)) {
-        if (file.size > MAX_FILE_SIZE) { errors.push(`"${file.name}" — demasiado grande (máx 512 KB)`); continue; }
+        if (file.size > maxTextBytes) {
+          errors.push(`"${file.name}" — demasiado grande (máx ${maxTextBytes / 1024} KB)`);
+          continue;
+        }
         try { newText.push(await readTextFile(file)); }
         catch { errors.push(`"${file.name}" — no se pudo leer`); }
       } else {
@@ -125,7 +154,7 @@ export function ChatWindow() {
     if (newText.length   > 0) setAttachments     (prev => [...prev, ...newText]);
     if (newBinary.length > 0) setBinaryAttachments(prev => [...prev, ...newBinary]);
     if (errors.length    > 0) { setFileErrors(errors); setTimeout(() => setFileErrors([]), 5000); }
-  }, []);
+  }, [maxImageBytes, maxPdfBytes, maxTextBytes]);
 
   // ── Drag & drop handlers ──────────────────────────────────────────────────
 
@@ -168,7 +197,14 @@ export function ChatWindow() {
     const content = input.trim();
     if (!content && attachments.length === 0 && binaryAttachments.length === 0) return;
     if (isLoading) return;
-    if (!activeConvId) await newConversation();
+    if (!activeConvId) {
+      try {
+        await newConversation();
+      } catch {
+        useChatStore.setState({ error: "No se pudo iniciar la conversación. ¿Está el backend activo?" });
+        return;
+      }
+    }
 
     // Embed text file contents in the message body
     let fullContent = content;
@@ -379,7 +415,9 @@ function EmptyState() {
 function SuggestionChip({ text }: { text: string }) {
   const { sendMessage, activeConvId, newConversation } = useChatStore();
   const handleClick = async () => {
-    if (!activeConvId) await newConversation();
+    if (!activeConvId) {
+      try { await newConversation(); } catch { return; }
+    }
     sendMessage(text);
   };
   return (

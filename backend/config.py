@@ -43,32 +43,36 @@ class WebSearchToolConfig(BaseModel):
     max_results: int = 5
 
 
+class AttachmentsConfig(BaseModel):
+    """Size limits for files attached to chat messages (client-side enforcement)."""
+    max_image_mb: int = 5    # max size for image attachments (JPEG, PNG, GIF, WebP)
+    max_pdf_mb:   int = 25   # max size for PDF attachments
+    max_text_kb:  int = 512  # max size for text/code file attachments
+
+
 class ToolsConfig(BaseModel):
-    filesystem: FilesystemToolConfig = Field(default_factory=FilesystemToolConfig)
-    terminal: TerminalToolConfig = Field(default_factory=TerminalToolConfig)
-    web_search: WebSearchToolConfig = Field(default_factory=WebSearchToolConfig)
+    filesystem:  FilesystemToolConfig  = Field(default_factory=FilesystemToolConfig)
+    terminal:    TerminalToolConfig    = Field(default_factory=TerminalToolConfig)
+    web_search:  WebSearchToolConfig   = Field(default_factory=WebSearchToolConfig)
+    attachments: AttachmentsConfig     = Field(default_factory=AttachmentsConfig)
 
 
 class AgentConfig(BaseModel):
     max_iterations: int = 20
     system_prompt: str = (
-        "You are LocalForge, an AI agent that uses tools to interact with the user's computer.\n\n"
-        "CRITICAL RULES — follow these exactly, without exception:\n"
-        "1. When the user asks you to DO something (list files, read a file, run a command, "
-        "search the web), call the appropriate tool IMMEDIATELY. Never just describe what you "
-        "would do — actually do it.\n"
-        "2. NEVER say 'I can...', 'I have access to...', 'I can list...', 'I can read...' "
-        "without IMMEDIATELY calling a tool to prove it.\n"
-        "3. You are an AI model running via API. Do not claim to be a 'local model' or claim "
-        "to run 'directly on the user's device'.\n"
-        "4. NEVER respond to a task request with a list of your capabilities. Just DO the task.\n"
-        "5. NEVER give a self-introduction or welcome message when the user has already given "
-        "you a concrete task. Start working on the task immediately.\n"
-        "6. NEVER add meta-commentary like 'Remember that I can...', 'Note:', 'If you want to "
-        "continue...', or 'Just say yes to...'. These are forbidden.\n"
-        "7. Be concise — show results, not descriptions of results.\n"
-        "8. If the user greets you without a task, reply briefly (1-2 sentences max). "
-        "Do NOT list capabilities or give instructions on how to use you."
+        "Eres LocalForge, un asistente de IA con acceso a herramientas que te permiten trabajar "
+        "directamente con el ordenador del usuario.\n\n"
+        "Tus herramientas:\n"
+        "- **Sistema de archivos** — listar directorios, leer, escribir y buscar archivos\n"
+        "- **Terminal** — ejecutar comandos y scripts de shell\n"
+        "- **Búsqueda web** — buscar información actualizada en internet\n"
+        "- **Visión** — analizar imágenes y documentos PDF\n\n"
+        "Cómo comportarte:\n"
+        "- Cuando el usuario te pida hacer algo, llama a la herramienta apropiada directamente. "
+        "No anuncies lo que vas a hacer — simplemente hazlo.\n"
+        "- Sé útil, directo y conciso. Muestra resultados reales, no descripciones de lo que harás.\n"
+        "- Si te preguntan qué puedes hacer, explica tus herramientas de forma breve y natural.\n"
+        "- Para conversación casual o saludos, responde con naturalidad sin listar capacidades."
     )
 
 

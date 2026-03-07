@@ -16,7 +16,7 @@ from fastapi import APIRouter, HTTPException
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 
-from backend.agent.loop import run_agent
+from backend.agent.loop import run_agent, strip_thinking
 from backend.config import get_config
 from backend.db.store import (
     add_message,
@@ -214,24 +214,38 @@ async def send_message(conv_id: str, body: SendMessageRequest):
             elif event.type == "tool_call":
                 tool_events.append(event.data)
 
-        # Persist assistant message
+        # Persist assistant message (strip thinking tokens before storing)
         if full_text:
             await add_message(
                 conv_id,
                 "assistant",
-                full_text,
+                strip_thinking(full_text),
                 metadata={"tool_calls": tool_events} if tool_events else None,
             )
 
-        # Collect title result (should already be done; 5s fallback timeout)
+        # Send DONE immediately — don't block on title generation.
+        # For fast cloud APIs the title task is usually done by now (check with no wait).
+        # For slow local models it's still running; we let it finish in the background
+        # and update the DB silently (the sidebar refreshes on next loadConversations).
         if title_task:
-            try:
-                clean_title = await _asyncio.wait_for(title_task, timeout=5.0)
-                if clean_title:
-                    await update_conversation_title(conv_id, clean_title)
-                    yield f"data: {json.dumps({'type': 'title_updated', 'data': {'title': clean_title}})}\n\n"
-            except Exception:
-                pass
+            if title_task.done() and not title_task.exception():
+                try:
+                    clean_title = title_task.result()
+                    if clean_title:
+                        await update_conversation_title(conv_id, clean_title)
+                        yield f"data: {json.dumps({'type': 'title_updated', 'data': {'title': clean_title}})}\n\n"
+                except Exception:
+                    pass
+            elif not title_task.done():
+                # Still running (local model) — update DB in background, no SSE event
+                async def _bg_title(task: "_asyncio.Task[str]", cid: str) -> None:
+                    try:
+                        result = await _asyncio.wait_for(task, timeout=60.0)
+                        if result:
+                            await update_conversation_title(cid, result)
+                    except Exception:
+                        pass
+                _asyncio.create_task(_bg_title(title_task, conv_id))
 
         yield "data: [DONE]\n\n"
 
