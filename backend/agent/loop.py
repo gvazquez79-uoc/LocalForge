@@ -7,6 +7,7 @@ from __future__ import annotations
 import asyncio
 import json
 import re
+import uuid
 from pathlib import Path
 from typing import AsyncIterator
 
@@ -60,6 +61,75 @@ def _tools_to_anthropic(tools: list[BaseTool]) -> list[dict]:
 
 def _tools_to_openai(tools: list[BaseTool]) -> list[dict]:
     return [t.to_openai_schema() for t in tools]
+
+
+# ── Inline tool call parser ───────────────────────────────────────────────────
+# Some local models (e.g. Qwen via Ollama) output tool calls as plain text
+# instead of using the structured OpenAI function-call API.  Common formats:
+#   icall {"name": "list_directory", "arguments": {"path": "..."}}
+#   <tool_call>{"name": "...", "arguments": {...}}</tool_call>
+#   <functioncall>{"name": "...", "arguments": {...}}</functioncall>
+
+_INLINE_TOOL_PREFIXES = re.compile(
+    r'(?:icall|<tool_call>|<functioncall>)\s*',
+    re.IGNORECASE,
+)
+
+
+def _extract_json_object(text: str, start: int) -> str | None:
+    """Return the JSON object that begins at `start`, or None if parsing fails."""
+    if start >= len(text) or text[start] != "{":
+        return None
+    depth = 0
+    in_str = False
+    esc = False
+    for i in range(start, len(text)):
+        c = text[i]
+        if esc:
+            esc = False
+            continue
+        if c == "\\" and in_str:
+            esc = True
+            continue
+        if c == '"':
+            in_str = not in_str
+            continue
+        if in_str:
+            continue
+        if c == "{":
+            depth += 1
+        elif c == "}":
+            depth -= 1
+            if depth == 0:
+                return text[start : i + 1]
+    return None
+
+
+def _parse_inline_tool_calls(text: str) -> list[dict]:
+    """Extract tool calls embedded as text and return them in the same dict
+    format as the adapter's 'tool_call' events: {id, name, input}."""
+    results: list[dict] = []
+    seen: set[str] = set()
+    for match in _INLINE_TOOL_PREFIXES.finditer(text):
+        raw = _extract_json_object(text, match.end())
+        if not raw:
+            continue
+        try:
+            obj = json.loads(raw)
+        except json.JSONDecodeError:
+            continue
+        name = obj.get("name") or obj.get("function")
+        args = obj.get("arguments") or obj.get("parameters") or obj.get("input") or {}
+        if not name or name in seen:
+            continue
+        if isinstance(args, str):
+            try:
+                args = json.loads(args)
+            except json.JSONDecodeError:
+                args = {}
+        seen.add(name)
+        results.append({"id": f"inline_{uuid.uuid4().hex[:8]}", "name": name, "input": args})
+    return results
 
 
 # Phrases that indicate the model claims to have done something without a tool call,
@@ -333,31 +403,61 @@ async def run_agent(
             working_messages.append(assistant_msg)
 
         if not tool_calls:
-            # Detect hallucinated actions only when the user actually requested a task
-            # (not a greeting, not a capability inquiry) and only once per turn.
-            if (
-                hallucination_corrections < 1
-                and assistant_text
-                and _is_task_request(working_messages)
-                and not _is_capability_inquiry(working_messages)
-                and _detect_hallucinated_action(assistant_text)
-            ):
-                hallucination_corrections += 1
-                correction = (
-                    "[SYSTEM] You described having capabilities or claimed to take an action, "
-                    "but you did NOT call any tool. You MUST call the appropriate tool RIGHT NOW. "
-                    "Do not write more text explaining what you can do — just call the tool. "
-                    "For example: if the user asked to list files, call list_directory(). "
-                    "If they asked to run a command, call execute_command(). "
-                    "Call the tool NOW."
-                )
-                # Inject correction silently — no warning shown in the chat UI.
-                # Tell the frontend to discard the text streamed so far (the capability list)
-                # so the next iteration's response starts clean.
-                yield StreamEvent(type="clear_content", data={})
-                working_messages.append({"role": "user", "content": correction})
-                continue
-            return
+            # ── Inline tool call recovery ──────────────────────────────────
+            # Some local models (e.g. Qwen via Ollama) write tool calls as
+            # plain text ("icall {...}") instead of using the structured API.
+            # Detect and execute them transparently.
+            if assistant_text and not is_anthropic:
+                inline = _parse_inline_tool_calls(assistant_text)
+                if inline:
+                    # Rewrite the last assistant message to use the tool_calls
+                    # format so the model history stays coherent.
+                    working_messages.pop()
+                    assistant_msg_inline: dict = {"role": "assistant", "content": None}
+                    assistant_msg_inline["tool_calls"] = [
+                        {
+                            "id": tc["id"],
+                            "type": "function",
+                            "function": {
+                                "name": tc["name"],
+                                "arguments": json.dumps(tc["input"]),
+                            },
+                        }
+                        for tc in inline
+                    ]
+                    working_messages.append(assistant_msg_inline)
+                    # Clear the raw text from the UI so the user sees only the
+                    # actual tool result, not the raw "icall {...}" text.
+                    yield StreamEvent(type="clear_content", data={})
+                    tool_calls = inline
+                    # Fall through to tool execution below
+
+            if not tool_calls:
+                # Detect hallucinated actions only when the user actually requested a task
+                # (not a greeting, not a capability inquiry) and only once per turn.
+                if (
+                    hallucination_corrections < 1
+                    and assistant_text
+                    and _is_task_request(working_messages)
+                    and not _is_capability_inquiry(working_messages)
+                    and _detect_hallucinated_action(assistant_text)
+                ):
+                    hallucination_corrections += 1
+                    correction = (
+                        "[SYSTEM] You described having capabilities or claimed to take an action, "
+                        "but you did NOT call any tool. You MUST call the appropriate tool RIGHT NOW. "
+                        "Do not write more text explaining what you can do — just call the tool. "
+                        "For example: if the user asked to list files, call list_directory(). "
+                        "If they asked to run a command, call execute_command(). "
+                        "Call the tool NOW."
+                    )
+                    # Inject correction silently — no warning shown in the chat UI.
+                    # Tell the frontend to discard the text streamed so far (the capability list)
+                    # so the next iteration's response starts clean.
+                    yield StreamEvent(type="clear_content", data={})
+                    working_messages.append({"role": "user", "content": correction})
+                    continue
+                return
 
         # Execute each tool call
         for tc in tool_calls:
