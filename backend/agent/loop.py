@@ -429,6 +429,9 @@ async def run_agent(
                     # Clear the raw text from the UI so the user sees only the
                     # actual tool result, not the raw "icall {...}" text.
                     yield StreamEvent(type="clear_content", data={})
+                    # Emit tool_call events so the frontend shows the tool blocks.
+                    for tc in inline:
+                        yield StreamEvent(type="tool_call", data=tc)
                     tool_calls = inline
                     # Fall through to tool execution below
 
