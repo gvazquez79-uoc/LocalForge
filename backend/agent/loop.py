@@ -207,6 +207,63 @@ _HALLUCINATION_PATTERNS = [
     "remember, i can",
     "just say \"yes\"",
     "just say 'yes'",
+    # Future-tense announcements without tool call (ES) — "going to do X" but didn't
+    "voy a revisar",
+    "voy a leer",
+    "voy a modificar",
+    "voy a editar",
+    "voy a escribir",
+    "voy a crear",
+    "voy a ejecutar",
+    "voy a buscar",
+    "voy a listar",
+    "voy a analizar",
+    "voy a verificar",
+    "voy a comprobar",
+    "voy a añadir",
+    "voy a agregar",
+    "voy a actualizar",
+    "voy a cambiar",
+    "voy a abrir",
+    "te voy a mostrar",
+    "te voy a dar",
+    "procedo a revisar",
+    "procedo a leer",
+    "procedo a modificar",
+    "procedo a ejecutar",
+    "a continuación voy",
+    "a continuación revisaré",
+    "a continuación leeré",
+    "revisaré el archivo",
+    "leeré el archivo",
+    "modificaré el archivo",
+    "editaré el archivo",
+    # Future-tense announcements without tool call (EN)
+    "i'm going to review",
+    "i'm going to read",
+    "i'm going to modify",
+    "i'm going to edit",
+    "i'm going to write",
+    "i'm going to create",
+    "i'm going to execute",
+    "i'm going to search",
+    "i'm going to list",
+    "i'm going to analyze",
+    "i will review",
+    "i will read",
+    "i will modify",
+    "i will edit",
+    "i will write",
+    "i will create",
+    "i'll review",
+    "i'll read",
+    "i'll modify",
+    "i'll add",
+    "let me review",
+    "let me read",
+    "let me modify",
+    "let me check",
+    "let me look at",
 ]
 
 
@@ -344,7 +401,15 @@ async def run_agent(
     is_anthropic = "anthropic" in type(adapter).__name__.lower()
     schema_tools = _tools_to_anthropic(tools) if is_anthropic else _tools_to_openai(tools)
 
-    system = cfg.agent.system_prompt + _load_memory()
+    # Use per-model system prompt if defined, otherwise fall back to the global one
+    # OllamaNativeAdapter uses self.model_name; AnthropicAdapter/OpenAICompatAdapter use self.model
+    model_name = getattr(adapter, "model", None) or getattr(adapter, "model_name", None)
+    per_model_prompt: str | None = None
+    if model_name:
+        matched = next((m for m in cfg.models if m.name == model_name), None)
+        if matched and matched.system_prompt:
+            per_model_prompt = matched.system_prompt
+    system = (per_model_prompt or cfg.agent.system_prompt) + _load_memory()
     working_messages = list(messages)
     max_iter = cfg.agent.max_iterations
     hallucination_corrections = 0  # Limit corrections to 1 per turn to avoid loops

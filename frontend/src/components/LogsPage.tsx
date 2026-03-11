@@ -172,7 +172,7 @@ export function LogsPage() {
 
         {/* Entry count */}
         <span className="text-zinc-500 text-[11px]">
-          {visible.toLocaleString()} / {entries.toLocaleString()} entries
+          {visible.length.toLocaleString()} / {entries.length.toLocaleString()} entries
         </span>
 
         {/* Pause/Resume */}

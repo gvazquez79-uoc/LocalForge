@@ -244,6 +244,7 @@ export interface DbModel {
   api_key_masked: string | null;
   base_url: string | null;
   is_default: boolean;
+  system_prompt: string | null;
 }
 
 export interface DbModelCreate {
@@ -253,15 +254,17 @@ export interface DbModelCreate {
   api_key?: string;
   base_url?: string;
   is_default?: boolean;
+  system_prompt?: string | null;
 }
 
 export interface DbModelUpdate {
   name?: string;
   display_name?: string;
   provider?: string;
-  api_key?: string | null;  // null = keep, "" = clear
+  api_key?: string | null;     // null = keep, "" = clear
   base_url?: string | null;
   is_default?: boolean;
+  system_prompt?: string | null; // null = keep, "" = clear
 }
 
 export async function listDbModels(): Promise<DbModel[]> {

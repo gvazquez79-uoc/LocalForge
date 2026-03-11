@@ -67,7 +67,7 @@ export function SettingsPanel({ open, onClose }: SettingsPanelProps) {
   const [dbModels, setDbModels] = useState<DbModel[]>([]);
   const [modelFormOpen, setModelFormOpen] = useState(false);
   const [editingModelId, setEditingModelId] = useState<string | null>(null);
-  const [modelForm, setModelForm] = useState({ name: "", display_name: "", provider: "ollama", base_url: "" });
+  const [modelForm, setModelForm] = useState({ name: "", display_name: "", provider: "ollama", base_url: "", system_prompt: "" });
   const [overrideUrl, setOverrideUrl] = useState(false);  // show base_url input even when provider has URL
   const [modelSaving, setModelSaving] = useState(false);
   const [modelError, setModelError] = useState<string | null>(null);
@@ -100,7 +100,7 @@ export function SettingsPanel({ open, onClose }: SettingsPanelProps) {
   const openModelCreate = () => {
     setEditingModelId(null);
     const defaultProvider = providers[0]?.name ?? "ollama";
-    setModelForm({ name: "", display_name: "", provider: defaultProvider, base_url: "" });
+    setModelForm({ name: "", display_name: "", provider: defaultProvider, base_url: "", system_prompt: "" });
     setOverrideUrl(false);
     setModelError(null);
     setModelFormOpen(true);
@@ -112,7 +112,7 @@ export function SettingsPanel({ open, onClose }: SettingsPanelProps) {
     const providerDefaultUrl = providerUrlMap[m.provider] ?? "";
     // Only show override if model has a URL that differs from its provider's URL
     const hasCustomUrl = !!modelBaseUrl && modelBaseUrl !== providerDefaultUrl;
-    setModelForm({ name: m.name, display_name: m.display_name, provider: m.provider, base_url: hasCustomUrl ? modelBaseUrl : "" });
+    setModelForm({ name: m.name, display_name: m.display_name, provider: m.provider, base_url: hasCustomUrl ? modelBaseUrl : "", system_prompt: m.system_prompt ?? "" });
     setOverrideUrl(hasCustomUrl);
     setModelError(null);
     setModelFormOpen(true);
@@ -228,12 +228,14 @@ export function SettingsPanel({ open, onClose }: SettingsPanelProps) {
     // Only persist base_url if user explicitly overrode it; otherwise null = inherit from provider
     const effectiveBaseUrl = overrideUrl && modelForm.base_url ? modelForm.base_url : null;
     try {
+      const effectivePrompt = modelForm.system_prompt.trim() || null;
       if (editingModelId) {
         const updated = await updateDbModel(editingModelId, {
           name: modelForm.name,
           display_name: modelForm.display_name,
           provider: modelForm.provider,
           base_url: effectiveBaseUrl,
+          system_prompt: effectivePrompt ?? "",  // "" = clear if empty
         });
         setDbModels(ms => ms.map(m => m.id === editingModelId ? updated : m));
       } else {
@@ -243,6 +245,7 @@ export function SettingsPanel({ open, onClose }: SettingsPanelProps) {
           provider: modelForm.provider,
           base_url: effectiveBaseUrl ?? undefined,
           is_default: dbModels.length === 0,
+          system_prompt: effectivePrompt,
         });
         setDbModels(ms => [...ms, created]);
       }
@@ -521,16 +524,17 @@ export function SettingsPanel({ open, onClose }: SettingsPanelProps) {
                         )}
                       </select>
                     </div>
-                    {/* Base URL — inherited from provider unless overridden */}
+                    {/* Base URL — always collapsed by default; user must opt in to override */}
                     {(() => {
                       const providerUrl = providerUrlMap[modelForm.provider] ?? "";
-                      if (providerUrl && !overrideUrl) {
+                      if (!overrideUrl) {
                         return (
                           <div className="space-y-1">
                             <label className="text-xs font-medium text-gray-500 dark:text-zinc-400">Base URL</label>
                             <div className="flex items-center gap-2 px-3 py-1.5 bg-gray-50 dark:bg-zinc-900 border border-gray-200 dark:border-zinc-700 rounded-sm">
-                              <span className="flex-1 text-[12px] font-mono text-gray-400 dark:text-zinc-500 truncate">{providerUrl}</span>
-                              <span className="text-[9px] text-gray-400 dark:text-zinc-600 flex-shrink-0">del provider</span>
+                              <span className="flex-1 text-[12px] font-mono text-gray-400 dark:text-zinc-500 truncate">
+                                {providerUrl || <span className="italic">heredada del provider</span>}
+                              </span>
                               <button
                                 type="button"
                                 onClick={() => { setOverrideUrl(true); setModelForm(f => ({ ...f, base_url: providerUrl })); }}
@@ -546,15 +550,13 @@ export function SettingsPanel({ open, onClose }: SettingsPanelProps) {
                         <div className="space-y-1">
                           <div className="flex items-center justify-between">
                             <label className="text-xs font-medium text-gray-500 dark:text-zinc-400">Base URL</label>
-                            {providerUrl && overrideUrl && (
-                              <button
-                                type="button"
-                                onClick={() => { setOverrideUrl(false); setModelForm(f => ({ ...f, base_url: "" })); }}
-                                className="text-[12px] text-gray-400 hover:text-gray-600 dark:text-zinc-500 transition-colors"
-                              >
-                                ← usar URL del provider
-                              </button>
-                            )}
+                            <button
+                              type="button"
+                              onClick={() => { setOverrideUrl(false); setModelForm(f => ({ ...f, base_url: "" })); }}
+                              className="text-[12px] text-gray-400 hover:text-gray-600 dark:text-zinc-500 transition-colors"
+                            >
+                              ← usar URL del provider
+                            </button>
                           </div>
                           <input
                             type="text"
@@ -566,6 +568,28 @@ export function SettingsPanel({ open, onClose }: SettingsPanelProps) {
                         </div>
                       );
                     })()}
+                    {/* Per-model system prompt */}
+                    <div className="flex flex-col gap-1">
+                      <label className="text-[11px] font-medium text-gray-500 dark:text-zinc-400">
+                        Prompt del modelo{" "}
+                        <span className="font-normal text-gray-400 dark:text-zinc-500">(opcional — reemplaza el prompt global)</span>
+                      </label>
+                      <textarea
+                        value={modelForm.system_prompt}
+                        onChange={(e) => setModelForm(f => ({ ...f, system_prompt: e.target.value }))}
+                        placeholder={"Eres un asistente especializado en..."}
+                        rows={5}
+                        className="w-full bg-white border border-gray-300 dark:bg-zinc-800 dark:border-zinc-700 rounded-sm px-3 py-1.5 text-xs text-gray-800 dark:text-zinc-200 placeholder-gray-400 dark:placeholder-zinc-600 focus:outline-none focus:border-emerald-500 font-mono resize-y"
+                      />
+                      {modelForm.system_prompt.trim() && (
+                        <button
+                          onClick={() => setModelForm(f => ({ ...f, system_prompt: "" }))}
+                          className="self-start text-[11px] text-gray-400 hover:text-gray-600 dark:text-zinc-500 transition-colors"
+                        >
+                          ✕ Limpiar prompt
+                        </button>
+                      )}
+                    </div>
                     {modelError && <p className="text-[12px] text-red-500">{modelError}</p>}
                     <div className="flex gap-2 pt-1">
                       <button onClick={handleModelSave} disabled={modelSaving} className="flex-1 py-1.5 text-xs bg-emerald-600 hover:bg-emerald-500 disabled:opacity-50 text-white rounded-sm transition-colors">

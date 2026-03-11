@@ -10,6 +10,7 @@ For models that don't support tools, we fall back gracefully with no tools.
 """
 from __future__ import annotations
 
+import json
 import logging
 from typing import AsyncIterator
 
@@ -31,6 +32,28 @@ def _convert_messages_to_ollama(messages: list[dict], system: str) -> list[dict]
 
         # Skip messages with no content (e.g. assistant tool-call-only turns from Claude)
         if role == "assistant" and not content and not msg.get("tool_calls"):
+            continue
+
+        # Handle assistant messages with tool_calls in OpenAI format.
+        # This happens after inline tool-call recovery rewrites "icall {...}" text
+        # into structured tool_calls. Convert to Ollama's tool_calls schema.
+        if role == "assistant" and msg.get("tool_calls"):
+            openai_tcs = msg["tool_calls"]
+            ollama_tcs = []
+            for tc in openai_tcs:
+                fn = tc.get("function", {})
+                args = fn.get("arguments", {})
+                if isinstance(args, str):
+                    try:
+                        args = json.loads(args)
+                    except Exception:
+                        args = {}
+                ollama_tcs.append({"function": {"name": fn.get("name", ""), "arguments": args}})
+            result.append({
+                "role": "assistant",
+                "content": str(content or ""),
+                "tool_calls": ollama_tcs,
+            })
             continue
 
         if role == "tool":

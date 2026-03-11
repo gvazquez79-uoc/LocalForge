@@ -22,6 +22,7 @@ class ModelConfig(BaseModel):
     api_key: Optional[str] = None       # direct key (from DB)
     base_url: Optional[str] = None
     id: Optional[str] = None            # DB row id (None for JSON-sourced models)
+    system_prompt: Optional[str] = None # per-model system prompt override
 
 
 class FilesystemToolConfig(BaseModel):

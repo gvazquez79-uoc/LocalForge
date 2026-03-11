@@ -28,15 +28,17 @@ class ModelCreate(BaseModel):
     api_key: Optional[str] = None
     base_url: Optional[str] = None
     is_default: bool = False
+    system_prompt: Optional[str] = None
 
 
 class ModelUpdate(BaseModel):
     name: Optional[str] = None
     display_name: Optional[str] = None
     provider: Optional[str] = None
-    api_key: Optional[str] = None   # None = keep; "" = clear
+    api_key: Optional[str] = None      # None = keep; "" = clear
     base_url: Optional[str] = None
     is_default: Optional[bool] = None
+    system_prompt: Optional[str] = None  # None = keep; "" = clear
 
 
 @router.get("/models")
@@ -54,6 +56,7 @@ async def api_create_model(body: ModelCreate):
             api_key=body.api_key,
             base_url=body.base_url,
             is_default=body.is_default,
+            system_prompt=body.system_prompt,
         )
     except ValueError as exc:
         raise HTTPException(status_code=409, detail=str(exc))
@@ -71,6 +74,7 @@ async def api_update_model(model_id: str, body: ModelUpdate):
         api_key=body.api_key,
         base_url=body.base_url,
         is_default=body.is_default,
+        system_prompt=body.system_prompt,
     )
     if model is None:
         raise HTTPException(status_code=404, detail="Model not found")

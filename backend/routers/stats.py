@@ -11,23 +11,28 @@ from fastapi import APIRouter
 router = APIRouter(prefix="/stats", tags=["stats"])
 
 # Try to initialize NVML once at module load
+import logging as _logging
+import warnings as _warnings
 _nvml_ok = False
+_pynvml = None
 try:
-    import pynvml
-    pynvml.nvmlInit()
+    with _warnings.catch_warnings():
+        _warnings.simplefilter("ignore")   # suppress FutureWarning from pynvml
+        import pynvml as _pynvml
+    _pynvml.nvmlInit()
     _nvml_ok = True
-except Exception:
-    pass
+except Exception as _e:
+    _logging.warning(f"NVML init failed (no GPU stats): {_e}")
 
 
 def _gpu_info() -> dict | None:
-    if not _nvml_ok:
+    if not _nvml_ok or _pynvml is None:
         return None
     try:
-        handle = pynvml.nvmlDeviceGetHandleByIndex(0)
-        mem    = pynvml.nvmlDeviceGetMemoryInfo(handle)
-        util   = pynvml.nvmlDeviceGetUtilizationRates(handle)
-        name   = pynvml.nvmlDeviceGetName(handle)
+        handle = _pynvml.nvmlDeviceGetHandleByIndex(0)
+        mem    = _pynvml.nvmlDeviceGetMemoryInfo(handle)
+        util   = _pynvml.nvmlDeviceGetUtilizationRates(handle)
+        name   = _pynvml.nvmlDeviceGetName(handle)
         if isinstance(name, bytes):
             name = name.decode()
         return {

@@ -22,9 +22,17 @@ async def init_models_table() -> None:
                 api_key TEXT,
                 base_url VARCHAR(500),
                 is_default TINYINT(1) DEFAULT 0,
+                system_prompt TEXT,
                 created_at DATETIME DEFAULT CURRENT_TIMESTAMP
             )
         """)
+    # Migration: add system_prompt to existing tables that don't have it yet
+    try:
+        async with get_db() as db:
+            await db.execute("ALTER TABLE models ADD COLUMN system_prompt TEXT")
+            await db.commit()
+    except Exception:
+        pass  # Column already exists — fine
 
 
 async def list_models_db() -> list[ModelConfig]:
@@ -61,6 +69,7 @@ async def create_model(
     api_key: Optional[str] = None,
     base_url: Optional[str] = None,
     is_default: bool = False,
+    system_prompt: Optional[str] = None,
 ) -> dict:
     model_id = str(uuid.uuid4())
     if is_default:
@@ -68,9 +77,9 @@ async def create_model(
     try:
         async with get_db() as db:
             await db.execute(
-                "INSERT INTO models (id, name, display_name, provider, api_key, base_url, is_default) "
-                "VALUES (?, ?, ?, ?, ?, ?, ?)",
-                (model_id, name, display_name, provider, api_key or None, base_url or None, 1 if is_default else 0),
+                "INSERT INTO models (id, name, display_name, provider, api_key, base_url, is_default, system_prompt) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                (model_id, name, display_name, provider, api_key or None, base_url or None, 1 if is_default else 0, system_prompt or None),
             )
             await db.commit()
             # SELECT within the same connection so the row is guaranteed visible
@@ -93,6 +102,7 @@ async def create_model(
             "api_key_masked": _mask_key(api_key),
             "base_url": base_url or None,
             "is_default": is_default,
+            "system_prompt": system_prompt or None,
         }
     return _row_to_dict_masked(row)
 
@@ -102,9 +112,10 @@ async def update_model(
     name: Optional[str] = None,
     display_name: Optional[str] = None,
     provider: Optional[str] = None,
-    api_key: Optional[str] = None,   # None = don't change; "" = clear key
+    api_key: Optional[str] = None,       # None = don't change; "" = clear key
     base_url: Optional[str] = None,
     is_default: Optional[bool] = None,
+    system_prompt: Optional[str] = None, # None = don't change; "" = clear prompt
 ) -> Optional[dict]:
     row = await _fetch_by_id(model_id)
     if row is None:
@@ -123,6 +134,14 @@ async def update_model(
     else:
         new_api_key = api_key
 
+    # system_prompt: None = keep existing, "" = clear, otherwise replace
+    if system_prompt is None:
+        new_system_prompt = row.get("system_prompt")
+    elif system_prompt == "":
+        new_system_prompt = None
+    else:
+        new_system_prompt = system_prompt
+
     if is_default:
         await _clear_default()
     new_is_default = 1 if is_default else (row.get("is_default", 0) if is_default is None else 0)
@@ -130,9 +149,9 @@ async def update_model(
     async with get_db() as db:
         await db.execute(
             "UPDATE models SET name=?, display_name=?, provider=?, api_key=?, "
-            "base_url=?, is_default=? WHERE id=?",
+            "base_url=?, is_default=?, system_prompt=? WHERE id=?",
             (new_name, new_display_name, new_provider, new_api_key,
-             new_base_url or None, new_is_default, model_id),
+             new_base_url or None, new_is_default, new_system_prompt, model_id),
         )
         await db.commit()
         # SELECT within the same connection so the updated row is guaranteed visible
@@ -215,6 +234,7 @@ def _row_to_dict_masked(row: dict) -> dict:
         "api_key_masked": _mask_key(row.get("api_key")),
         "base_url": row.get("base_url"),
         "is_default": bool(row.get("is_default", 0)),
+        "system_prompt": row.get("system_prompt") or None,
     }
 
 
@@ -226,4 +246,5 @@ def _row_to_model(row: dict) -> ModelConfig:
         provider=row["provider"],
         api_key=row.get("api_key"),
         base_url=row.get("base_url"),
+        system_prompt=row.get("system_prompt") or None,
     )
