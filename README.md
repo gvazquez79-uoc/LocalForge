@@ -1,7 +1,7 @@
 # 🔨 LocalForge
 
 Local AI agent system with filesystem, terminal and web search access.
-Multi-model support via a unified OpenAI-compatible layer — works with Ollama, Anthropic, Groq, OpenRouter, OpenAI, Mistral, DeepSeek, Together AI and any custom provider.
+Multi-model support via a unified layer — works with Ollama (native API), Anthropic, Groq, OpenRouter, OpenAI, Mistral, DeepSeek, Together AI and any custom OpenAI-compatible provider.
 
 ---
 
@@ -10,14 +10,15 @@ Multi-model support via a unified OpenAI-compatible layer — works with Ollama,
 - **Multi-model** — switch between models from any provider in a single dropdown; Ollama models auto-discovered
 - **Agent loop** — multi-turn reasoning with tool use (filesystem, terminal, web search)
 - **Tool confirmations** — sensitive actions (write/delete files, run commands) require explicit approval in the UI
-- **Image & PDF attachments** — drag & drop or paste images and PDFs; the agent reads and analyzes them
+- **Image, PDF & text attachments** — drag & drop or paste; the agent reads and analyzes them; text files shown as chips (not dumped into the bubble)
 - **Persistent chat history** — conversations stored in SQLite (default) or MySQL
 - **Persistent memory** — the agent remembers things across conversations via `~/.localforge_memory.md`
+- **Per-model system prompt** — each model can have its own system prompt that overrides the global one
 - **Telegram bot** — full agent access from Telegram (same tools, same models), configurable from Settings
 - **Developer mode** — live log viewer at `/logs` with level filtering, search and SSE stream
 - **Dark / light theme** — persisted per user
 - **API key auth** — optional password protection for server deployments
-- **Hallucination detection** — catches models that claim to use tools without actually calling them
+- **Hallucination detection** — catches models that claim to use tools without actually calling them, and models that output inline tool calls as text (`icall {...}`)
 
 ---
 
@@ -25,9 +26,9 @@ Multi-model support via a unified OpenAI-compatible layer — works with Ollama,
 
 | Layer | Technology |
 |---|---|
-| Backend | Python 3.13 · FastAPI · aiosqlite / aiomysql |
+| Backend | Python 3.13+ · FastAPI · aiosqlite / aiomysql |
 | Frontend | React · Vite · TypeScript · Tailwind CSS v3 · Zustand · lucide-react |
-| Agent | Anthropic SDK · OpenAI-compatible SDK |
+| Agent | Anthropic SDK · OpenAI-compatible SDK · ollama (native API) |
 | Bot | python-telegram-bot v20+ |
 
 ---
@@ -46,6 +47,7 @@ LocalForge/
 │   │   ├── base.py
 │   │   ├── anthropic.py
 │   │   ├── openai_compat.py
+│   │   ├── ollama_native.py     # Ollama /api/chat native adapter
 │   │   └── registry.py          # Provider → adapter resolution
 │   ├── tools/
 │   │   ├── base.py
@@ -62,7 +64,7 @@ LocalForge/
 │   ├── db/
 │   │   ├── connection.py        # SQLite/MySQL abstraction (_Wrapper)
 │   │   ├── store.py             # Conversation persistence
-│   │   ├── models_store.py      # Model CRUD
+│   │   ├── models_store.py      # Model CRUD (includes system_prompt column)
 │   │   ├── providers_store.py   # Provider CRUD + builtin seeding
 │   │   └── settings_store.py    # App config stored as JSON blob
 │   ├── middleware/
@@ -83,11 +85,12 @@ LocalForge/
 │       ├── ToolBlock.tsx
 │       ├── ModelSelector.tsx
 │       ├── SettingsPanel.tsx    # Full settings UI (config, models, providers)
-│       ├── StatsBar.tsx         # CPU / RAM / GPU stats
+│       ├── StatsBar.tsx         # CPU / RAM / GPU / VRAM stats
 │       ├── ConfirmationModal.tsx # Agent tool approval dialog
 │       ├── ConfirmDialog.tsx     # Generic reusable confirm dialog
 │       └── LogsPage.tsx         # Developer log viewer (route /logs)
 ├── localforge.json              # Seed config (DB is source of truth after first boot)
+├── requirements.txt             # Python dependencies with pinned versions
 ├── .env                         # Secrets and runtime config — never commit
 └── start.bat                    # Windows one-click startup
 ```
@@ -100,7 +103,10 @@ LocalForge/
 
 ```bash
 # Python backend
-py -3 -m pip install fastapi uvicorn anthropic openai duckduckgo-search aiosqlite aiomysql pydantic-settings python-dotenv python-telegram-bot pypdf
+py -3 -m pip install -r requirements.txt
+
+# Or manually:
+py -3 -m pip install fastapi uvicorn anthropic openai duckduckgo-search aiosqlite aiomysql pydantic-settings python-telegram-bot psutil pynvml ollama pypdf
 
 # Frontend
 cd frontend && npm install
@@ -192,20 +198,24 @@ Providers and models are fully managed from **Settings → Providers** and **Set
 
 ### Builtin providers
 
-| Provider | Base URL | API key env var |
+| Provider | Base URL | Notes |
 |---|---|---|
-| Ollama (local) | `http://localhost:11434/v1` | _(none needed)_ |
-| Anthropic | _(native SDK)_ | `ANTHROPIC_API_KEY` |
-| OpenAI | `https://api.openai.com/v1` | `OPENAI_API_KEY` |
-| Groq | `https://api.groq.com/openai/v1` | `GROQ_API_KEY` |
-| OpenRouter | `https://openrouter.ai/api/v1` | `OPENROUTER_API_KEY` |
-| Together AI | `https://api.together.xyz/v1` | `TOGETHER_API_KEY` |
-| Mistral | `https://api.mistral.ai/v1` | `MISTRAL_API_KEY` |
-| DeepSeek | `https://api.deepseek.com/v1` | `DEEPSEEK_API_KEY` |
+| Ollama (local) | `http://localhost:11434` | Uses native `/api/chat`; no API key needed |
+| Anthropic | _(native SDK)_ | No base URL needed; set API key in provider |
+| OpenAI | `https://api.openai.com/v1` | OpenAI-compatible |
+| Groq | `https://api.groq.com/openai/v1` | OpenAI-compatible |
+| OpenRouter | `https://openrouter.ai/api/v1` | Model names: `provider/model-name` |
+| Together AI | `https://api.together.xyz/v1` | OpenAI-compatible |
+| Mistral | `https://api.mistral.ai/v1` | OpenAI-compatible |
+| DeepSeek | `https://api.deepseek.com/v1` | OpenAI-compatible |
 
-> **Ollama** models are auto-discovered — they appear in the model selector without manual registration.
+> **Ollama** uses the native `/api/chat` API (not the OpenAI-compat layer), which avoids empty-response bugs on some models. Models are auto-discovered from the running Ollama instance.
 >
-> **OpenRouter** model names use the `provider/model-name` format (e.g. `openai/gpt-4o`, `meta-llama/llama-3.3-70b`). Always select provider **openrouter** for these.
+> **Anthropic** uses the native Anthropic SDK — do not set a base URL.
+
+### Per-model system prompt
+
+Each model can have its own system prompt that overrides the global one. Set it in **Settings → Models → Edit → System Prompt**. Useful for specialized agents (e.g. a coding-only model, a model that always replies in a specific language).
 
 ---
 
@@ -213,9 +223,9 @@ Providers and models are fully managed from **Settings → Providers** and **Set
 
 ```
 conversations  (id, title, created_at, updated_at)
-messages       (id, conversation_id, role, content, created_at)
-models         (id, name, display_name, provider, api_key, base_url, is_default, created_at)
-providers      (id, name, display_name, base_url, api_key_env, is_builtin, created_at)
+messages       (id, conversation_id, role, content, created_at, metadata)
+models         (id, name, display_name, provider, api_key, base_url, is_default, system_prompt, created_at)
+providers      (id, name, display_name, base_url, api_key_env, api_key, is_builtin, created_at)
 settings       (setting_key, value)   ← app config as JSON blob
 ```
 
@@ -244,7 +254,7 @@ SQLite (`localforge.db`) is used by default. Set `DATABASE_URL=mysql://...` in `
 | `POST` | `/api/models/{id}/test` | Test model connectivity |
 | `GET/POST` | `/api/providers` | List / create providers |
 | `PUT/DELETE` | `/api/providers/{id}` | Update / delete provider |
-| `GET` | `/api/stats` | System stats (CPU, RAM, GPU via Ollama) |
+| `GET` | `/api/stats` | System stats (CPU, RAM, GPU/VRAM via pynvml + Ollama) |
 | `GET` | `/api/logs` | Recent log entries — `?n=500&level=ERROR` |
 | `GET` | `/api/logs/stream` | Live log stream (SSE) — `?api_key=...` |
 
@@ -273,16 +283,22 @@ logger.info("This appears in the log viewer automatically")
 
 ---
 
-## Image & PDF attachments
+## Attachments
 
-- **Images** — drag & drop or use the 📎 button (JPEG, PNG, GIF, WebP)
-- **PDFs** — attached PDFs are read and analyzed by the agent
-- **Text files** — paste code or logs directly into the chat
+| Type | How to attach | What the agent sees |
+|---|---|---|
+| Images (JPEG, PNG, GIF, WebP) | Drag & drop or 📎 button | Full image via vision API |
+| PDFs | Drag & drop or 📎 button | Extracted text via pypdf |
+| Text files (`.txt`, `.py`, `.ts`, `.json`…) | Drag & drop or 📎 button | Full file contents embedded in the message |
+
+Text files are shown as a small chip above the message bubble — the raw file content is not displayed in the chat.
 
 PDF text extraction requires `pypdf`:
 ```bash
 py -3 -m pip install pypdf
 ```
+
+Attachment size limits are configurable in **Settings → Attachments** (defaults: images 5 MB, PDFs 25 MB, text 512 KB).
 
 ---
 
@@ -332,10 +348,11 @@ Commands: `/start` (reset conversation) · `/new` (new conversation)
 | **Filesystem** | Enable/disable, allowed paths, confirmation rules, max file size |
 | **Terminal** | Enable/disable, timeout, blocked command patterns |
 | **Web Search** | Enable/disable, max results |
-| **Agent** | Max iterations, system prompt |
+| **Attachments** | Max size limits for images, PDFs and text files |
+| **Agent** | Max iterations, global system prompt |
 | **Telegram** | Bot token, allowed user IDs, default model |
-| **Models** | Add, edit, delete, set default; test connectivity per model |
-| **Providers** | Add, edit, delete provider definitions (base URL + API key env var) |
+| **Models** | Add, edit, delete, set default; per-model system prompt; test connectivity |
+| **Providers** | Add, edit, delete provider definitions (base URL + API key) |
 
 ---
 

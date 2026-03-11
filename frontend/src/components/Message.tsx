@@ -1,7 +1,7 @@
-import { useMemo, useState } from "react";
+import { useMemo, useState, memo } from "react";
 import type { UIMessage } from "../store/chat";
 import { ToolBlock } from "./ToolBlock";
-import { Bot, User, FileText, ChevronDown, ChevronRight, BrainCircuit } from "lucide-react";
+import { Bot, User, FileText, File, ChevronDown, ChevronRight, BrainCircuit } from "lucide-react";
 import DOMPurify from "dompurify";
 import { marked } from "marked";
 import { usePrefs } from "../store/prefs";
@@ -104,7 +104,7 @@ function parseThinking(raw: string): { main: string; isThinking: boolean } {
   return { main, isThinking };
 }
 
-export function Message({ message }: MessageProps) {
+export const Message = memo(function Message({ message }: MessageProps) {
   const isUser = message.role === "user";
   const { renderMarkdown, showToolCalls } = usePrefs();
   const [thinkExpanded, setThinkExpanded] = useState(false);
@@ -152,11 +152,16 @@ export function Message({ message }: MessageProps) {
           </div>
         )}
 
-        {/* Attachment previews (images + PDFs) — shown above text for user messages */}
+        {/* Attachment previews (images + PDFs + text files) — shown above text for user messages */}
         {isUser && message.attachments && message.attachments.length > 0 && (
           <div className="flex flex-wrap gap-2 justify-end mb-1">
             {message.attachments.map((att, i) =>
-              att.isPdf ? (
+              att.isText ? (
+                <div key={i} className="flex items-center gap-1.5 px-2.5 py-1.5 bg-zinc-700/80 dark:bg-zinc-700 border border-zinc-600 rounded-md text-xs text-zinc-200">
+                  <File size={12} className="text-zinc-400 flex-shrink-0" />
+                  <span className="max-w-[160px] truncate">{att.name}</span>
+                </div>
+              ) : att.isPdf ? (
                 <div key={i} className="flex items-center gap-1.5 px-2.5 py-1.5 bg-emerald-500/80 rounded-sm text-xs text-white">
                   <FileText size={13} />
                   <span className="max-w-[160px] truncate">{att.name}</span>
@@ -227,4 +232,4 @@ export function Message({ message }: MessageProps) {
       </div>
     </div>
   );
-}
+});

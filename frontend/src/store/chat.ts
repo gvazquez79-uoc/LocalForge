@@ -26,8 +26,8 @@ export interface UIMessage {
   toolCalls?: ToolCallData[];
   toolResults?: Record<string, string>; // tool_use_id → result
   isStreaming?: boolean;
-  /** Binary attachments shown in the message bubble (images / PDFs) */
-  attachments?: Array<{ name: string; dataUrl: string; isPdf: boolean }>;
+  /** Attachments shown as chips/thumbnails in the message bubble */
+  attachments?: Array<{ name: string; dataUrl?: string; isPdf?: boolean; isText?: boolean }>;
 }
 
 interface ChatState {
@@ -47,7 +47,7 @@ interface ChatState {
   newConversation: () => Promise<void>;
   deleteConv: (id: string) => Promise<void>;
   renameConv: (id: string, title: string) => Promise<void>;
-  sendMessage: (content: string, images?: ImagePayload[]) => void;
+  sendMessage: (content: string, images?: ImagePayload[], displayContent?: string, textFileNames?: string[]) => void;
   setModel: (model: string) => void;
   stopStream: (() => void) | null;
   approveConfirmation: () => void;
@@ -157,24 +157,26 @@ export const useChatStore = create<ChatState>((set, get) => ({
     set({ pendingConfirmation: null, isLoading: false });
   },
 
-  sendMessage: (content: string, images?: ImagePayload[]) => {
+  sendMessage: (content: string, images?: ImagePayload[], displayContent?: string, textFileNames?: string[]) => {
     const { activeConvId, selectedModel, stopStream } = get();
     if (!activeConvId) return;
 
     stopStream?.();
 
     // Build attachment display info for the bubble
-    const attachments = images?.map(img => ({
+    const binaryAttachments = images?.map(img => ({
       name:    img.name,
       dataUrl: img.data_url,
       isPdf:   img.mime_type === "application/pdf",
-    }));
+    })) ?? [];
+    const textAttachments = (textFileNames ?? []).map(name => ({ name, isText: true as const }));
+    const allAttachments = [...binaryAttachments, ...textAttachments];
 
     const userMsg: UIMessage = {
       id:   `user-${Date.now()}`,
       role: "user",
-      content,
-      attachments: attachments && attachments.length > 0 ? attachments : undefined,
+      content: displayContent ?? content,
+      attachments: allAttachments.length > 0 ? allAttachments : undefined,
     };
 
     const assistantMsg: UIMessage = {

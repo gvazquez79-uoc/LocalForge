@@ -48,18 +48,16 @@ function isPdfFile(file: File): boolean {
 }
 
 export function ChatWindow() {
-  const {
-    messages,
-    isLoading,
-    sendMessage,
-    stopStream,
-    activeConvId,
-    newConversation,
-    error,
-    pendingConfirmation,
-    approveConfirmation,
-    rejectConfirmation,
-  } = useChatStore();
+  const messages           = useChatStore(s => s.messages);
+  const isLoading          = useChatStore(s => s.isLoading);
+  const sendMessage        = useChatStore(s => s.sendMessage);
+  const stopStream         = useChatStore(s => s.stopStream);
+  const activeConvId       = useChatStore(s => s.activeConvId);
+  const newConversation    = useChatStore(s => s.newConversation);
+  const error              = useChatStore(s => s.error);
+  const pendingConfirmation = useChatStore(s => s.pendingConfirmation);
+  const approveConfirmation = useChatStore(s => s.approveConfirmation);
+  const rejectConfirmation  = useChatStore(s => s.rejectConfirmation);
 
   const [input, setInput]                           = useState("");
   const [attachments, setAttachments]               = useState<FileAttachment[]>([]);
@@ -89,9 +87,11 @@ export function ChatWindow() {
       .catch(() => { /* keep defaults */ });
   }, []);
 
+  // Track only the last message ID for auto-scroll — avoids re-running on every text_delta
+  const lastMsgId = useChatStore(s => s.messages[s.messages.length - 1]?.id);
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: "smooth" });
-  }, [messages]);
+  }, [lastMsgId]);
 
   // ── File readers ─────────────────────────────────────────────────────────
 
@@ -226,7 +226,12 @@ export function ChatWindow() {
     setInput("");
     setAttachments([]);
     setBinaryAttachments([]);
-    sendMessage(fullContent, images.length > 0 ? images : undefined);
+    sendMessage(
+      fullContent,
+      images.length > 0 ? images : undefined,
+      content,                                     // display text (no file contents)
+      attachments.length > 0 ? attachments.map(a => a.name) : undefined,
+    );
   };
 
   const handleKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
