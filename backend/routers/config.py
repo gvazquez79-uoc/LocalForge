@@ -164,6 +164,27 @@ async def update_config(body: UpdateConfigRequest):
     return {"ok": True}
 
 
+@router.get("/memory")
+async def read_memory():
+    """Return the contents of the persistent memory file and its resolved path."""
+    from pathlib import Path
+    cfg = get_config()
+    memory_path = Path(cfg.agent.memory_file).expanduser()
+    content = memory_path.read_text(encoding="utf-8") if memory_path.exists() else ""
+    return {"content": content, "path": str(memory_path)}
+
+
+@router.delete("/memory")
+async def clear_memory():
+    """Overwrite the persistent memory file with empty content."""
+    from pathlib import Path
+    cfg = get_config()
+    memory_path = Path(cfg.agent.memory_file).expanduser()
+    memory_path.parent.mkdir(parents=True, exist_ok=True)
+    memory_path.write_text("", encoding="utf-8")
+    return {"ok": True}
+
+
 @router.post("/telegram/restart")
 async def restart_telegram():
     """Stop and restart the Telegram bot with the current config (no backend restart needed)."""

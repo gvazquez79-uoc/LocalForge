@@ -1,7 +1,7 @@
 import { useMemo, useState, memo } from "react";
 import type { UIMessage } from "../store/chat";
 import { ToolBlock } from "./ToolBlock";
-import { Bot, User, FileText, File, ChevronDown, ChevronRight, BrainCircuit } from "lucide-react";
+import { Bot, User, FileText, File, ChevronDown, ChevronRight, BrainCircuit, Coins } from "lucide-react";
 import DOMPurify from "dompurify";
 import { marked } from "marked";
 import { usePrefs } from "../store/prefs";
@@ -227,6 +227,17 @@ export const Message = memo(function Message({ message }: MessageProps) {
             {message.isStreaming && visibleContent && (
               <span className="inline-block w-0.5 h-4 bg-gray-400 dark:bg-zinc-400 animate-pulse ml-0.5 align-text-bottom" />
             )}
+          </div>
+        )}
+
+        {!isUser && !message.isStreaming && showToolCalls && message.usage && (
+          <div className="flex items-center gap-1.5 text-[11px] text-gray-400 dark:text-zinc-500 mt-0.5 px-1">
+            <Coins size={11} />
+            <span>{message.usage.input_tokens.toLocaleString()} in</span>
+            <span className="text-gray-300 dark:text-zinc-600">·</span>
+            <span>{message.usage.output_tokens.toLocaleString()} out</span>
+            <span className="text-gray-300 dark:text-zinc-600">·</span>
+            <span className="font-medium">{(message.usage.input_tokens + message.usage.output_tokens).toLocaleString()} total</span>
           </div>
         )}
       </div>

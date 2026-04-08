@@ -19,11 +19,15 @@ import {
   Eye,
   EyeOff,
   Paperclip,
+  Brain,
+  ChevronDown,
+  ChevronUp,
 } from "lucide-react";
 import {
   getConfig, saveConfig, restartTelegramBot,
   listDbModels, createDbModel, updateDbModel, deleteDbModel, setDefaultDbModel, testDbModel,
   listProviders, createProvider, updateProvider, deleteProvider,
+  getMemory, clearMemory,
 } from "../api/client";
 import type { LocalForgeConfig, DbModel, DbProvider, DbProviderUpdate } from "../api/client";
 import { getStoredTheme, setTheme } from "../store/theme";
@@ -82,6 +86,46 @@ export function SettingsPanel({ open, onClose }: SettingsPanelProps) {
   const openConfirm = (opts: ConfirmDialogOptions, onConfirm: () => void) =>
     setConfirmDialog({ ...opts, onConfirm });
   const closeConfirm = () => setConfirmDialog(null);
+
+  // ── Memory state ──────────────────────────────────────────────────────────
+  const [memoryContent, setMemoryContent] = useState<string | null>(null);
+  const [memoryPath, setMemoryPath] = useState<string>("");
+  const [memoryExpanded, setMemoryExpanded] = useState(false);
+  const [memoryLoading, setMemoryLoading] = useState(false);
+  const [memoryClearing, setMemoryClearing] = useState(false);
+
+  const handleViewMemory = async () => {
+    if (memoryExpanded) { setMemoryExpanded(false); return; }
+    setMemoryLoading(true);
+    try {
+      const res = await getMemory();
+      setMemoryContent(res.content);
+      setMemoryPath(res.path);
+      setMemoryExpanded(true);
+    } catch (e) {
+      setMemoryContent(`Error: ${String(e)}`);
+      setMemoryExpanded(true);
+    } finally {
+      setMemoryLoading(false);
+    }
+  };
+
+  const handleClearMemory = () => {
+    openConfirm(
+      { title: "Borrar memoria", message: "¿Seguro que quieres borrar toda la memoria persistente del agente? Esta acción no se puede deshacer.", confirmLabel: "Borrar", variant: "danger" as const },
+      async () => {
+        setMemoryClearing(true);
+        try {
+          await clearMemory();
+          setMemoryContent("");
+        } catch {
+          // ignore
+        } finally {
+          setMemoryClearing(false);
+        }
+      }
+    );
+  };
 
   // ── Providers state ───────────────────────────────────────────────────────
   const [providers, setProviders] = useState<DbProvider[]>([]);
@@ -870,6 +914,59 @@ export function SettingsPanel({ open, onClose }: SettingsPanelProps) {
                     className="w-full bg-gray-100 border border-gray-300 dark:bg-zinc-800 dark:border-zinc-700 rounded-sm px-3 py-2 text-xs text-gray-800 dark:text-zinc-200 focus:outline-none focus:border-emerald-500 resize-y"
                   />
                 </div>
+              </Section>
+
+              {/* ── Memory ── */}
+              <Section icon={<Brain size={15} />} title="Memoria">
+                <div className="space-y-1.5">
+                  <label className="text-xs font-medium text-gray-500 dark:text-zinc-400">Ruta del archivo de memoria</label>
+                  <input
+                    type="text"
+                    value={config.agent.memory_file}
+                    onChange={(e) => updateAgent({ memory_file: e.target.value })}
+                    placeholder="~/.localforge_memory.md"
+                    className="w-full bg-gray-100 border border-gray-300 dark:bg-zinc-800 dark:border-zinc-700 rounded-sm px-3 py-2 text-xs text-gray-800 dark:text-zinc-200 placeholder-gray-400 dark:placeholder-zinc-600 focus:outline-none focus:border-emerald-500 font-mono"
+                  />
+                  <p className="text-[11px] text-gray-400 dark:text-zinc-500">
+                    El agente puede guardar y leer información persistente entre conversaciones. Usa ~ para el directorio home.
+                  </p>
+                </div>
+                <div className="flex gap-2">
+                  <button
+                    type="button"
+                    onClick={handleViewMemory}
+                    disabled={memoryLoading}
+                    className="flex items-center gap-1.5 px-3 py-1.5 text-xs bg-gray-100 dark:bg-zinc-800 border border-gray-300 dark:border-zinc-700 rounded-sm hover:border-emerald-500 dark:hover:border-emerald-500 transition-colors disabled:opacity-50"
+                  >
+                    {memoryLoading ? (
+                      <div className="w-3 h-3 border border-gray-400 border-t-transparent rounded-full animate-spin" />
+                    ) : memoryExpanded ? (
+                      <ChevronUp size={12} />
+                    ) : (
+                      <ChevronDown size={12} />
+                    )}
+                    {memoryExpanded ? "Ocultar contenido" : "Ver contenido"}
+                  </button>
+                  <button
+                    type="button"
+                    onClick={handleClearMemory}
+                    disabled={memoryClearing}
+                    className="flex items-center gap-1.5 px-3 py-1.5 text-xs bg-gray-100 dark:bg-zinc-800 border border-gray-300 dark:border-zinc-700 rounded-sm hover:border-red-500 dark:hover:border-red-500 hover:text-red-600 dark:hover:text-red-400 transition-colors disabled:opacity-50"
+                  >
+                    <Trash2 size={12} />
+                    Borrar memoria
+                  </button>
+                </div>
+                {memoryExpanded && (
+                  <div className="space-y-1">
+                    {memoryPath && (
+                      <p className="text-[10px] text-gray-400 dark:text-zinc-500 font-mono truncate">{memoryPath}</p>
+                    )}
+                    <pre className="w-full bg-gray-100 dark:bg-zinc-900 border border-gray-300 dark:border-zinc-700 rounded-sm px-3 py-2 text-xs text-gray-700 dark:text-zinc-300 whitespace-pre-wrap overflow-auto max-h-48 font-mono">
+                      {memoryContent || <span className="text-gray-400 dark:text-zinc-600 italic">— vacío —</span>}
+                    </pre>
+                  </div>
+                )}
               </Section>
 
               {/* ── Telegram ── */}

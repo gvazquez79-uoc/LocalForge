@@ -9,21 +9,23 @@ import json
 import re
 import uuid
 from pathlib import Path
-from typing import AsyncIterator
+from typing import AsyncIterator, Awaitable, Callable
 
 from backend.config import get_config
 from backend.models.base import BaseModelAdapter, StreamEvent
 from backend.tools.base import BaseTool
 
-# Persistent memory file — shared across all conversations
-MEMORY_FILE = Path.home() / ".localforge_memory.md"
+def _get_memory_path() -> Path:
+    """Return the resolved Path for the persistent memory file (from config)."""
+    return Path(get_config().agent.memory_file).expanduser()
 
 
 def _load_memory() -> str:
     """Load persistent memory and return it as a system prompt addendum."""
-    if not MEMORY_FILE.exists():
+    memory_file = _get_memory_path()
+    if not memory_file.exists():
         return ""
-    content = MEMORY_FILE.read_text(encoding="utf-8").strip()
+    content = memory_file.read_text(encoding="utf-8").strip()
     if not content:
         return ""
     return (
@@ -64,15 +66,31 @@ def _tools_to_openai(tools: list[BaseTool]) -> list[dict]:
 
 
 # ── Inline tool call parser ───────────────────────────────────────────────────
-# Some local models (e.g. Qwen via Ollama) output tool calls as plain text
-# instead of using the structured OpenAI function-call API.  Common formats:
-#   icall {"name": "list_directory", "arguments": {"path": "..."}}
-#   <tool_call>{"name": "...", "arguments": {...}}</tool_call>
-#   <functioncall>{"name": "...", "arguments": {...}}</functioncall>
+# Some local models output tool calls as plain text instead of using the
+# structured OpenAI function-call API.  Supported formats:
+#
+#   Format A — JSON wrapper (Qwen2.5, etc.):
+#     icall {"name": "list_directory", "arguments": {"path": "..."}}
+#     <tool_call>{"name": "...", "arguments": {...}}</tool_call>
+#     <functioncall>{"name": "...", "arguments": {...}}</functioncall>
+#
+#   Format B — XML parameter syntax (qwen3-coder, etc.):
+#     <function=list_directory>
+#     <parameter=path>G:\Docker\laultimagencia</parameter>
+#     </function>
+#     (closing tags are optional — the parser handles truncated output too)
 
 _INLINE_TOOL_PREFIXES = re.compile(
     r'(?:icall|<tool_call>|<functioncall>)\s*',
     re.IGNORECASE,
+)
+
+# Matches <function=TOOL_NAME> with optional whitespace / closing >
+_FUNCTION_TAG = re.compile(r'<function=([a-zA-Z_][a-zA-Z0-9_]*)>', re.IGNORECASE)
+# Matches <parameter=NAME>VALUE</parameter>  OR  <parameter=NAME> VALUE (no closing)
+_PARAM_TAG = re.compile(
+    r'<parameter=([a-zA-Z_][a-zA-Z0-9_]*)>(.*?)(?:</parameter>|(?=<(?:parameter|/function)|$))',
+    re.DOTALL | re.IGNORECASE,
 )
 
 
@@ -110,6 +128,8 @@ def _parse_inline_tool_calls(text: str) -> list[dict]:
     format as the adapter's 'tool_call' events: {id, name, input}."""
     results: list[dict] = []
     seen: set[str] = set()
+
+    # ── Format A: JSON-based prefixes ────────────────────────────────────────
     for match in _INLINE_TOOL_PREFIXES.finditer(text):
         raw = _extract_json_object(text, match.end())
         if not raw:
@@ -129,6 +149,28 @@ def _parse_inline_tool_calls(text: str) -> list[dict]:
                 args = {}
         seen.add(name)
         results.append({"id": f"inline_{uuid.uuid4().hex[:8]}", "name": name, "input": args})
+
+    # ── Format B: <function=NAME> <parameter=P>V</parameter> ─────────────────
+    for fn_match in _FUNCTION_TAG.finditer(text):
+        name = fn_match.group(1)
+        if name in seen:
+            continue
+        # Collect everything after <function=NAME> until </function> or end
+        after = text[fn_match.end():]
+        end_tag = re.search(r'</function>', after, re.IGNORECASE)
+        block = after[: end_tag.start()] if end_tag else after
+        # Parse <parameter=NAME>VALUE</parameter> pairs within the block
+        args: dict = {}
+        for p_match in _PARAM_TAG.finditer(block):
+            param_name = p_match.group(1)
+            param_value = p_match.group(2).strip()
+            args[param_name] = param_value
+        if not args and not end_tag:
+            # Incomplete stream — skip to avoid phantom calls
+            continue
+        seen.add(name)
+        results.append({"id": f"inline_{uuid.uuid4().hex[:8]}", "name": name, "input": args})
+
     return results
 
 
@@ -264,6 +306,40 @@ _HALLUCINATION_PATTERNS = [
     "let me modify",
     "let me check",
     "let me look at",
+    # False refusals — model claims it cannot access files/filesystem when it has tools (ES)
+    "no puedo ver ni acceder",
+    "no puedo acceder a los archivos",
+    "no puedo ver los archivos",
+    "no tengo acceso al sistema de archivos",
+    "no tengo acceso directo a",
+    "no tengo capacidad de acceder",
+    "no tengo acceso a tu sistema",
+    "no puedo leer archivos",
+    "no puedo listar",
+    "no tengo herramientas para acceder",
+    "no puedo ejecutar comandos",
+    "no tengo acceso a archivos",
+    "no me es posible acceder",
+    "lamentablemente no puedo acceder",
+    "lo siento, pero no puedo acceder",
+    "lo siento, no puedo acceder",
+    "lo siento, pero no tengo",
+    # False refusals (EN)
+    "i cannot access your file",
+    "i can't access your file",
+    "i don't have access to your file",
+    "i do not have access to your file",
+    "i cannot read files",
+    "i can't read files",
+    "i cannot list files",
+    "i can't list files",
+    "i don't have file system access",
+    "i do not have file system access",
+    "i cannot execute commands",
+    "i can't execute commands",
+    "unfortunately i cannot access",
+    "sorry, i cannot access",
+    "sorry, i don't have",
 ]
 
 
@@ -358,7 +434,7 @@ def _requires_confirmation(tool_name: str, tool_input: dict) -> bool:
     
     if tool_name == "execute_command":
         return cfg.tools.terminal.require_confirmation
-    if tool_name == "write_file":
+    if tool_name in ("write_file", "edit_file"):
         return "write_file" in cfg.tools.filesystem.require_confirmation_for
     if tool_name == "delete_file":
         return "delete_file" in cfg.tools.filesystem.require_confirmation_for
@@ -378,7 +454,13 @@ def _format_confirmation_message(tool_name: str, tool_input: dict) -> str:
         mode = tool_input.get("mode", "overwrite")
         content_preview = tool_input.get("content", "")[:100]
         return f"Write to file:\n\n`{path}`\n\nMode: {mode}\n\nPreview:\n```\n{content_preview}...\n```"
-    
+
+    if tool_name == "edit_file":
+        path = tool_input.get("path", "")
+        old = tool_input.get("old_string", "")[:80]
+        new = tool_input.get("new_string", "")[:80]
+        return f"Edit file:\n\n`{path}`\n\n--- remove:\n```\n{old}\n```\n+++ add:\n```\n{new}\n```"
+
     if tool_name == "delete_file":
         path = tool_input.get("path", "")
         return f"Delete file:\n\n`{path}`\n\n⚠️ This action cannot be undone!"
@@ -390,6 +472,7 @@ async def run_agent(
     messages: list[dict],
     adapter: BaseModelAdapter,
     extra_tools: list[BaseTool] | None = None,
+    request_approval: Callable[[str], Awaitable[bool]] | None = None,
 ) -> AsyncIterator[StreamEvent]:
     """
     Run the agent loop. Yields StreamEvents for the frontend.
@@ -413,6 +496,8 @@ async def run_agent(
     working_messages = list(messages)
     max_iter = cfg.agent.max_iterations
     hallucination_corrections = 0  # Limit corrections to 1 per turn to avoid loops
+    total_input_tokens = 0
+    total_output_tokens = 0
 
     for iteration in range(max_iter):
         yield StreamEvent(type="iteration", data={"n": iteration + 1})
@@ -433,6 +518,11 @@ async def run_agent(
             elif event.type == "done":
                 stop_reason = event.data.get("stop_reason")
                 yield event
+
+            elif event.type == "usage":
+                total_input_tokens += event.data.get("input_tokens", 0)
+                total_output_tokens += event.data.get("output_tokens", 0)
+                # Don't forward per-iteration events; emit one total at the end
 
             elif event.type == "error":
                 yield event
@@ -512,12 +602,15 @@ async def run_agent(
                 ):
                     hallucination_corrections += 1
                     correction = (
-                        "[SYSTEM] You described having capabilities or claimed to take an action, "
-                        "but you did NOT call any tool. You MUST call the appropriate tool RIGHT NOW. "
-                        "Do not write more text explaining what you can do — just call the tool. "
-                        "For example: if the user asked to list files, call list_directory(). "
-                        "If they asked to run a command, call execute_command(). "
-                        "Call the tool NOW."
+                        "[SYSTEM] CRITICAL ERROR: You just said you cannot access files or the filesystem, "
+                        "but you DO have filesystem tools available to you RIGHT NOW. "
+                        "You are NOT a regular chat assistant — you are LocalForge, an agent with real tools. "
+                        "You MUST call the appropriate tool immediately without any explanation or apology. "
+                        "Available tools: list_directory(), read_file(), write_file(), edit_file(), "
+                        "search_files(), execute_command(), web_search(). "
+                        "If the user asked to list files → call list_directory() NOW. "
+                        "If the user asked to read code → call read_file() NOW. "
+                        "Do NOT explain, do NOT apologize — just call the tool."
                     )
                     # Inject correction silently — no warning shown in the chat UI.
                     # Tell the frontend to discard the text streamed so far (the capability list)
@@ -525,6 +618,11 @@ async def run_agent(
                     yield StreamEvent(type="clear_content", data={})
                     working_messages.append({"role": "user", "content": correction})
                     continue
+                if total_input_tokens or total_output_tokens:
+                    yield StreamEvent(type="usage", data={
+                        "input_tokens": total_input_tokens,
+                        "output_tokens": total_output_tokens,
+                    })
                 return
 
         # Execute each tool call
@@ -537,7 +635,6 @@ async def run_agent(
             
             # Check if confirmation is needed
             if tool and _requires_confirmation(tool_name, tool_input):
-                # Emit confirmation event - frontend will show modal
                 confirmation_msg = _format_confirmation_message(tool_name, tool_input)
                 yield StreamEvent(
                     type="tool_confirmation_needed",
@@ -548,25 +645,20 @@ async def run_agent(
                         "message": confirmation_msg,
                     },
                 )
-                # Emit that we're waiting
-                yield StreamEvent(
-                    type="tool_result",
-                    data={
-                        "tool_use_id": tool_id,
-                        "name": tool_name,
-                        "result": "⏳ Waiting for user confirmation...",
-                    },
-                )
-                # Add to history so we don't repeat
-                working_messages.append({
-                    "role": "tool",
-                    "tool_use_id": tool_id,
-                    "content": "⏳ Waiting for user confirmation...",
-                })
-                # Stop here - user needs to confirm
-                # In this simple version, we continue anyway
-                # The modal is informational + Cancel stops the stream
-            
+                # Pause until user approves or rejects (or timeout)
+                approved = await request_approval(tool_id) if request_approval else True
+                if not approved:
+                    result = "Ejecución cancelada por el usuario."
+                    yield StreamEvent(
+                        type="tool_result",
+                        data={"tool_use_id": tool_id, "name": tool_name, "result": result},
+                    )
+                    if is_anthropic:
+                        working_messages.append({"role": "tool", "tool_use_id": tool_id, "content": result})
+                    else:
+                        working_messages.append({"role": "tool", "tool_call_id": tool_id, "content": result})
+                    continue
+
             # Execute the tool
             if tool is None:
                 result = f"Error: unknown tool '{tool_name}'"

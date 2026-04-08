@@ -5,12 +5,19 @@ GET  /conversations            — list all
 GET  /conversations/{id}       — get with messages
 DELETE /conversations/{id}     — delete
 POST /conversations/{id}/chat  — send message (returns SSE stream)
-POST /conversations/{id}/approve — approve/reject pending tool
+POST /conversations/{id}/approve — approve/reject pending tool (unblocks the stream)
 """
 from __future__ import annotations
 
+import asyncio
 import json
 from typing import AsyncIterator
+
+# ── Tool approval registry ────────────────────────────────────────────────────
+# Maps "conv_id:tool_use_id" → asyncio.Event that the loop awaits.
+# When the frontend POSTs /approve, we set the event and store the decision.
+_approval_events: dict[str, asyncio.Event] = {}
+_approval_results: dict[str, bool] = {}
 
 from fastapi import APIRouter, HTTPException
 from fastapi.responses import StreamingResponse
@@ -139,7 +146,12 @@ async def rename_conv(conv_id: str, body: dict):
 
 @router.post("/{conv_id}/approve")
 async def approve_tool(conv_id: str, body: ApproveRequest):
-    """Approve or reject a pending tool execution."""
+    """Unblock the agent loop waiting for this tool_use_id."""
+    key = f"{conv_id}:{body.tool_use_id}"
+    _approval_results[key] = body.approved
+    event = _approval_events.get(key)
+    if event:
+        event.set()
     return {"ok": True, "approved": body.approved}
 
 
@@ -191,21 +203,32 @@ async def send_message(conv_id: str, body: SendMessageRequest):
     adapter = get_adapter(model_name)
 
     async def event_stream() -> AsyncIterator[str]:
-        import asyncio as _asyncio
-
         full_text = ""
         tool_events = []
 
         # Fire title generation IN PARALLEL with the agent response so it
         # doesn't add extra latency — by the time the model finishes, the
         # title is usually already ready.
-        title_task: "_asyncio.Task[str] | None" = None
+        title_task: "asyncio.Task[str] | None" = None
         if is_first_message:
-            title_task = _asyncio.create_task(
+            title_task = asyncio.create_task(
                 _generate_title(model_name, body.content)
             )
 
-        async for event in run_agent(messages, adapter):
+        async def _request_approval(tool_use_id: str) -> bool:
+            """Block the generator until the frontend sends /approve."""
+            key = f"{conv_id}:{tool_use_id}"
+            event = asyncio.Event()
+            _approval_events[key] = event
+            try:
+                await asyncio.wait_for(event.wait(), timeout=300.0)  # 5 min
+                return _approval_results.pop(key, False)
+            except asyncio.TimeoutError:
+                return False
+            finally:
+                _approval_events.pop(key, None)
+
+        async for event in run_agent(messages, adapter, request_approval=_request_approval):
             payload = json.dumps({"type": event.type, "data": event.data})
             yield f"data: {payload}\n\n"
 
@@ -238,14 +261,14 @@ async def send_message(conv_id: str, body: SendMessageRequest):
                     pass
             elif not title_task.done():
                 # Still running (local model) — update DB in background, no SSE event
-                async def _bg_title(task: "_asyncio.Task[str]", cid: str) -> None:
+                async def _bg_title(task: "asyncio.Task[str]", cid: str) -> None:
                     try:
-                        result = await _asyncio.wait_for(task, timeout=60.0)
+                        result = await asyncio.wait_for(task, timeout=60.0)
                         if result:
                             await update_conversation_title(cid, result)
                     except Exception:
                         pass
-                _asyncio.create_task(_bg_title(title_task, conv_id))
+                asyncio.create_task(_bg_title(title_task, conv_id))
 
         yield "data: [DONE]\n\n"
 

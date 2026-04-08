@@ -85,6 +85,11 @@ class AnthropicAdapter(BaseModelAdapter):
                     elif event_type == "RawMessageStopEvent":
                         final = await stream.get_final_message()
                         yield StreamEvent(type="done", data={"stop_reason": final.stop_reason})
+                        if final.usage:
+                            yield StreamEvent(type="usage", data={
+                                "input_tokens": final.usage.input_tokens,
+                                "output_tokens": final.usage.output_tokens,
+                            })
 
         except anthropic.AuthenticationError:
             yield StreamEvent(type="error", data={"message": "Invalid Anthropic API key"})

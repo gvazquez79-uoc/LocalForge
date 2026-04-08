@@ -129,6 +129,7 @@ class OpenAICompatAdapter(BaseModelAdapter):
             "model":    self.model_name,
             "messages": openai_messages,
             "stream":   True,
+            "stream_options": {"include_usage": True},
         }
         if tools:
             kwargs["tools"] = tools
@@ -148,7 +149,13 @@ class OpenAICompatAdapter(BaseModelAdapter):
                     raise
 
             async for chunk in stream:
+                # Usage-only chunk (stream_options include_usage) — no choices
                 if not chunk.choices:
+                    if hasattr(chunk, "usage") and chunk.usage:
+                        yield StreamEvent(type="usage", data={
+                            "input_tokens": chunk.usage.prompt_tokens or 0,
+                            "output_tokens": chunk.usage.completion_tokens or 0,
+                        })
                     continue
 
                 choice = chunk.choices[0]

@@ -11,6 +11,7 @@ const TOOL_META: Record<string, { icon: React.ReactNode; label: string; color: s
   execute_command: { icon: <Terminal size={13} />,   label: "Ejecutando comando",    color: "text-orange-500 dark:text-orange-400" },
   read_file:       { icon: <FileText size={13} />,   label: "Leyendo archivo",       color: "text-blue-500 dark:text-blue-400" },
   write_file:      { icon: <PenLine size={13} />,    label: "Escribiendo archivo",   color: "text-emerald-600 dark:text-emerald-400" },
+  edit_file:       { icon: <PenLine size={13} />,    label: "Editando archivo",      color: "text-emerald-600 dark:text-emerald-400" },
   list_directory:  { icon: <FolderOpen size={13} />, label: "Listando directorio",   color: "text-violet-500 dark:text-violet-400" },
   search_files:    { icon: <Search size={13} />,     label: "Buscando archivos",     color: "text-cyan-500 dark:text-cyan-400" },
   delete_file:     { icon: <Trash2 size={13} />,     label: "Eliminando archivo",    color: "text-red-500 dark:text-red-400" },

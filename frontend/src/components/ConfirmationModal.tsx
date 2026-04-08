@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { AlertTriangle, X, Check, Terminal, FileText, Trash2 } from "lucide-react";
 
 export interface PendingConfirmation {
@@ -17,32 +17,34 @@ interface ConfirmationModalProps {
 export function ConfirmationModal({ confirmation, onApprove, onReject }: ConfirmationModalProps) {
   const [loading, setLoading] = useState(false);
 
-  const handleApprove = async () => {
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") onReject();
+      if (e.key === "Enter" && !loading) { setLoading(true); onApprove(); }
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [loading, onApprove, onReject]);
+
+  const handleApprove = () => {
     setLoading(true);
     onApprove();
   };
 
   const getIcon = () => {
     switch (confirmation.name) {
-      case "execute_command":
-        return <Terminal className="w-5 h-5" />;
-      case "write_file":
-        return <FileText className="w-5 h-5" />;
-      case "delete_file":
-        return <Trash2 className="w-5 h-5" />;
-      default:
-        return <AlertTriangle className="w-5 h-5" />;
+      case "execute_command": return <Terminal className="w-5 h-5" />;
+      case "write_file":      return <FileText className="w-5 h-5" />;
+      case "delete_file":     return <Trash2 className="w-5 h-5" />;
+      default:                return <AlertTriangle className="w-5 h-5" />;
     }
   };
 
   const getColor = () => {
     switch (confirmation.name) {
-      case "delete_file":
-        return "text-red-500 bg-red-50 dark:bg-red-950/30";
-      case "execute_command":
-        return "text-orange-500 bg-orange-50 dark:bg-orange-950/30";
-      default:
-        return "text-yellow-500 bg-yellow-50 dark:bg-yellow-950/30";
+      case "delete_file":     return "text-red-500 bg-red-50 dark:bg-red-950/30";
+      case "execute_command": return "text-orange-500 bg-orange-50 dark:bg-orange-950/30";
+      default:                return "text-yellow-500 bg-yellow-50 dark:bg-yellow-950/30";
     }
   };
 
@@ -50,17 +52,14 @@ export function ConfirmationModal({ confirmation, onApprove, onReject }: Confirm
     <div className="fixed inset-0 z-50 flex items-center justify-center">
       {/* Backdrop */}
       <div className="absolute inset-0 bg-black/50" onClick={onReject} />
-      
+
       {/* Modal */}
       <div className="relative bg-white dark:bg-zinc-900 rounded-xl shadow-2xl max-w-lg w-full mx-4 overflow-hidden">
         {/* Header */}
         <div className={`flex items-center gap-3 px-4 py-3 border-b border-gray-200 dark:border-zinc-700 ${getColor()}`}>
           {getIcon()}
-          <span className="font-semibold">Confirmation Required</span>
-          <button
-            onClick={onReject}
-            className="ml-auto p-1 hover:bg-black/10 rounded-sm"
-          >
+          <span className="font-semibold">Confirmación requerida</span>
+          <button onClick={onReject} className="ml-auto p-1 hover:bg-black/10 rounded-sm">
             <X className="w-4 h-4" />
           </button>
         </div>
@@ -80,15 +79,15 @@ export function ConfirmationModal({ confirmation, onApprove, onReject }: Confirm
             className="flex-1 flex items-center justify-center gap-2 px-4 py-2 rounded-sm border border-gray-300 dark:border-zinc-600 text-gray-700 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-zinc-700 transition-colors"
           >
             <X className="w-4 h-4" />
-            Cancel
+            Cancelar <span className="text-xs opacity-50 ml-1">Esc</span>
           </button>
           <button
             onClick={handleApprove}
             disabled={loading}
-            className="flex-1 flex items-center justify-center gap-2 px-4 py-2 rounded-sm bg-red-600 hover:bg-red-500 text-white transition-colors"
+            className="flex-1 flex items-center justify-center gap-2 px-4 py-2 rounded-sm bg-red-600 hover:bg-red-500 text-white transition-colors disabled:opacity-60"
           >
             <Check className="w-4 h-4" />
-            {loading ? "Executing..." : "Execute"}
+            {loading ? "Ejecutando…" : <>Ejecutar <span className="text-xs opacity-70 ml-1">Enter</span></>}
           </button>
         </div>
       </div>

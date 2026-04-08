@@ -28,6 +28,8 @@ export interface UIMessage {
   isStreaming?: boolean;
   /** Attachments shown as chips/thumbnails in the message bubble */
   attachments?: Array<{ name: string; dataUrl?: string; isPdf?: boolean; isText?: boolean }>;
+  /** Token usage for this message (only available when provider supports it) */
+  usage?: { input_tokens: number; output_tokens: number };
 }
 
 interface ChatState {
@@ -146,7 +148,8 @@ export const useChatStore = create<ChatState>((set, get) => ({
     if (pendingConfirmation && activeConvId) {
       await approveTool(activeConvId, pendingConfirmation.tool_use_id, true);
     }
-    set({ pendingConfirmation: null });
+    // The SSE stream is still open — restore loading state while the tool runs
+    set({ pendingConfirmation: null, isLoading: true });
   },
 
   rejectConfirmation: async () => {
@@ -154,7 +157,8 @@ export const useChatStore = create<ChatState>((set, get) => ({
     if (pendingConfirmation && activeConvId) {
       await approveTool(activeConvId, pendingConfirmation.tool_use_id, false);
     }
-    set({ pendingConfirmation: null, isLoading: false });
+    // Loop resumes briefly to persist the cancellation message, then finishes
+    set({ pendingConfirmation: null, isLoading: true });
   },
 
   sendMessage: (content: string, images?: ImagePayload[], displayContent?: string, textFileNames?: string[]) => {
@@ -234,6 +238,8 @@ export const useChatStore = create<ChatState>((set, get) => ({
             updated.content = "";
             updated.toolCalls = [];
             updated.toolResults = {};
+          } else if (event.type === "usage") {
+            updated.usage = event.data as { input_tokens: number; output_tokens: number };
           } else if (event.type === "text_delta") {
             updated.content += (event.data as { text: string }).text;
           } else if (event.type === "tool_call") {

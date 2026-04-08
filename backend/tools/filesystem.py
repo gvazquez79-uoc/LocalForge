@@ -21,6 +21,15 @@ def _is_under(child: Path, parent: Path) -> bool:
     return child_str.startswith(parent_str)
 
 
+# Directories to skip when doing recursive content search
+_EXCLUDED_DIRS: frozenset[str] = frozenset({
+    "node_modules", ".git", "__pycache__", ".venv", "venv", "env",
+    "dist", "build", ".next", ".nuxt", ".svelte-kit", "target",
+    ".cache", ".parcel-cache", "coverage", ".pytest_cache", ".mypy_cache",
+    ".tox", ".eggs", "*.egg-info",
+})
+
+
 def _resolve_and_check(path: str) -> Path:
     """Resolve path and verify it's inside an allowed directory."""
     resolved = Path(path).expanduser().resolve()
@@ -84,8 +93,11 @@ class WriteFileTool(BaseTool):
     async def run(self, path: str, content: str, mode: str = "overwrite", **_: Any) -> str:
         resolved = _resolve_and_check(path)
         resolved.parent.mkdir(parents=True, exist_ok=True)
-        file_mode = "a" if mode == "append" else "w"
-        resolved.write_text(content, encoding="utf-8") if file_mode == "w" else open(resolved, "a").write(content)
+        if mode == "append":
+            with open(resolved, "a", encoding="utf-8") as f:
+                f.write(content)
+        else:
+            resolved.write_text(content, encoding="utf-8")
         action = "appended to" if mode == "append" else "written to"
         return f"Success: {len(content)} characters {action} {resolved}"
 
@@ -161,10 +173,13 @@ class SearchFilesTool(BaseTool):
                 return f"No files found matching '{pattern}' in {resolved_dir}"
             return f"Found {len(matches)} file(s):\n" + "\n".join(str(m) for m in matches)
         else:
-            # Grep mode — search text in *.txt, *.py, *.md, etc.
+            # Grep mode — search text in files, skipping noisy dirs
             results = []
             for filepath in resolved_dir.rglob("*"):
                 if not filepath.is_file():
+                    continue
+                # Skip files inside excluded directories
+                if any(part in _EXCLUDED_DIRS for part in filepath.relative_to(resolved_dir).parts):
                     continue
                 try:
                     text = filepath.read_text(encoding="utf-8", errors="ignore")
@@ -181,6 +196,55 @@ class SearchFilesTool(BaseTool):
             if not results:
                 return f"No matches for '{pattern}' in {resolved_dir}"
             return "\n".join(results)
+
+
+class EditFileTool(BaseTool):
+    name = "edit_file"
+    description = (
+        "Replace an exact string in a file with new content. "
+        "Prefer this over write_file for targeted edits — it only changes the part you specify. "
+        "The old_string must match exactly, including whitespace and indentation. "
+        "Use read_file first if you need to see the current content."
+    )
+    parameters = {
+        "type": "object",
+        "properties": {
+            "path": {"type": "string", "description": "Absolute or ~ path to the file"},
+            "old_string": {"type": "string", "description": "Exact string to find (must be unique in the file)"},
+            "new_string": {"type": "string", "description": "Replacement string"},
+            "replace_all": {
+                "type": "boolean",
+                "description": "Replace all occurrences instead of just the first (default: false)",
+                "default": False,
+            },
+        },
+        "required": ["path", "old_string", "new_string"],
+    }
+
+    async def run(self, path: str, old_string: str, new_string: str, replace_all: bool = False, **_: Any) -> str:
+        resolved = _resolve_and_check(path)
+        if not resolved.exists():
+            return f"Error: file not found: {resolved}"
+        if not resolved.is_file():
+            return f"Error: not a file: {resolved}"
+        if not old_string:
+            return "Error: old_string cannot be empty"
+
+        content = resolved.read_text(encoding="utf-8")
+        count = content.count(old_string)
+
+        if count == 0:
+            return f"Error: old_string not found in {resolved}"
+        if count > 1 and not replace_all:
+            return (
+                f"Error: old_string appears {count} times in {resolved}. "
+                "Add more surrounding context to make it unique, or set replace_all=true."
+            )
+
+        new_content = content.replace(old_string, new_string) if replace_all else content.replace(old_string, new_string, 1)
+        resolved.write_text(new_content, encoding="utf-8")
+        replaced = count if replace_all else 1
+        return f"Success: replaced {replaced} occurrence(s) in {resolved}"
 
 
 class DeleteFileTool(BaseTool):
@@ -208,6 +272,7 @@ class DeleteFileTool(BaseTool):
 FILESYSTEM_TOOLS: list[BaseTool] = [
     ReadFileTool(),
     WriteFileTool(),
+    EditFileTool(),
     ListDirectoryTool(),
     SearchFilesTool(),
     DeleteFileTool(),

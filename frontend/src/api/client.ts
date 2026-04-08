@@ -170,6 +170,7 @@ export interface LocalForgeConfig {
   };
   agent: {
     max_iterations: number;
+    memory_file: string;
     system_prompt: string;
   };
   telegram: {
@@ -204,6 +205,20 @@ export async function restartTelegramBot(): Promise<{ ok: boolean; running: bool
   });
   if (!res.ok) throw new Error(await res.text());
   return res.json();
+}
+
+export async function getMemory(): Promise<{ content: string; path: string }> {
+  const res = await fetch(`${BASE}/config/memory`, { headers: authHeaders() });
+  if (!res.ok) throw new Error(await res.text());
+  return res.json();
+}
+
+export async function clearMemory(): Promise<void> {
+  const res = await fetch(`${BASE}/config/memory`, {
+    method: "DELETE",
+    headers: authHeaders(),
+  });
+  if (!res.ok) throw new Error(await res.text());
 }
 
 // ── Models (selector) ────────────────────────────────────────────────────────
