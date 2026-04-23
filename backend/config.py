@@ -44,6 +44,18 @@ class WebSearchToolConfig(BaseModel):
     max_results: int = 5
 
 
+class VideoToolConfig(BaseModel):
+    enabled: bool = True
+    ffmpeg_path: str = "ffmpeg"   # path or "ffmpeg" if it's on PATH
+
+
+class ReplicateToolConfig(BaseModel):
+    enabled: bool = False
+    api_key: str = ""
+    default_image_model: str = "black-forest-labs/flux-schnell"
+    default_video_model: str = "wan-ai/wan2.1-t2v-480p"
+
+
 class AttachmentsConfig(BaseModel):
     """Size limits for files attached to chat messages (client-side enforcement)."""
     max_image_mb: int = 5    # max size for image attachments (JPEG, PNG, GIF, WebP)
@@ -55,6 +67,8 @@ class ToolsConfig(BaseModel):
     filesystem:  FilesystemToolConfig  = Field(default_factory=FilesystemToolConfig)
     terminal:    TerminalToolConfig    = Field(default_factory=TerminalToolConfig)
     web_search:  WebSearchToolConfig   = Field(default_factory=WebSearchToolConfig)
+    video:       VideoToolConfig       = Field(default_factory=VideoToolConfig)
+    replicate:   ReplicateToolConfig   = Field(default_factory=ReplicateToolConfig)
     attachments: AttachmentsConfig     = Field(default_factory=AttachmentsConfig)
 
 
@@ -68,7 +82,9 @@ class AgentConfig(BaseModel):
         "- **Sistema de archivos** — listar directorios, leer, escribir, **editar** y buscar archivos\n"
         "- **Terminal** — ejecutar comandos y scripts de shell\n"
         "- **Búsqueda web** — buscar información actualizada en internet\n"
-        "- **Visión** — analizar imágenes y documentos PDF\n\n"
+        "- **Visión** — analizar imágenes y documentos PDF\n"
+        "- **Video (FFmpeg)** — crear videos desde imágenes, convertir formatos, recortar clips, añadir audio\n"
+        "- **Generación IA** — generar imágenes y videos con Replicate (Flux, Wan2.1, etc.)\n\n"
         "Cómo comportarte:\n"
         "- Cuando el usuario te pida hacer algo, llama a la herramienta apropiada directamente. "
         "No anuncies lo que vas a hacer — simplemente hazlo.\n"

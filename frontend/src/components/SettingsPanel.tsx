@@ -22,6 +22,8 @@ import {
   Brain,
   ChevronDown,
   ChevronUp,
+  Film,
+  Image,
 } from "lucide-react";
 import {
   getConfig, saveConfig, restartTelegramBot,
@@ -45,7 +47,9 @@ const DEFAULT_SYSTEM_PROMPT =
   "- **Sistema de archivos** — listar directorios, leer, escribir y buscar archivos\n" +
   "- **Terminal** — ejecutar comandos y scripts de shell\n" +
   "- **Búsqueda web** — buscar información actualizada en internet\n" +
-  "- **Visión** — analizar imágenes y documentos PDF\n\n" +
+  "- **Visión** — analizar imágenes y documentos PDF\n" +
+  "- **Video (FFmpeg)** — crear videos desde imágenes, convertir formatos, recortar clips, añadir audio\n" +
+  "- **Generación IA** — generar imágenes y videos con Replicate (Flux, Wan2.1, etc.)\n\n" +
   "Cómo comportarte:\n" +
   "- Cuando el usuario te pida hacer algo, llama a la herramienta apropiada directamente. " +
   "No anuncies lo que vas a hacer — simplemente hazlo.\n" +
@@ -370,6 +374,16 @@ export function SettingsPanel({ open, onClose }: SettingsPanelProps) {
   const updateWebSearch = (patch: Partial<LocalForgeConfig["tools"]["web_search"]>) =>
     setConfig((c) =>
       c ? { ...c, tools: { ...c.tools, web_search: { ...c.tools.web_search, ...patch } } } : c
+    );
+
+  const updateVideo = (patch: Partial<LocalForgeConfig["tools"]["video"]>) =>
+    setConfig((c) =>
+      c ? { ...c, tools: { ...c.tools, video: { ...c.tools.video, ...patch } } } : c
+    );
+
+  const updateReplicate = (patch: Partial<LocalForgeConfig["tools"]["replicate"]>) =>
+    setConfig((c) =>
+      c ? { ...c, tools: { ...c.tools, replicate: { ...c.tools.replicate, ...patch } } } : c
     );
 
   const updateAttachments = (patch: Partial<LocalForgeConfig["tools"]["attachments"]>) =>
@@ -883,6 +897,76 @@ export function SettingsPanel({ open, onClose }: SettingsPanelProps) {
                     max={20}
                     onChange={(v) => updateWebSearch({ max_results: v })}
                   />
+                )}
+              </Section>
+
+              {/* ── Video (FFmpeg) ── */}
+              <Section icon={<Film size={15} />} title="Video (FFmpeg)">
+                <Toggle
+                  label="Enable video tools"
+                  checked={config.tools.video?.enabled ?? true}
+                  onChange={(v) => updateVideo({ enabled: v })}
+                />
+                {(config.tools.video?.enabled ?? true) && (
+                  <div className="flex flex-col gap-1">
+                    <label className="text-xs text-gray-600 dark:text-zinc-300">Ruta de ffmpeg</label>
+                    <input
+                      type="text"
+                      value={config.tools.video?.ffmpeg_path ?? "ffmpeg"}
+                      placeholder="ffmpeg"
+                      onChange={(e) => updateVideo({ ffmpeg_path: e.target.value })}
+                      className="px-2 py-1.5 text-xs rounded-lg border border-gray-200 dark:border-zinc-700 bg-white dark:bg-zinc-800 text-gray-800 dark:text-zinc-100 focus:outline-none focus:ring-1 focus:ring-emerald-400"
+                    />
+                    <p className="text-[11px] text-gray-400 dark:text-zinc-500">
+                      Deja <code className="bg-zinc-100 dark:bg-zinc-800 px-1 rounded">ffmpeg</code> si está en el PATH del sistema.
+                    </p>
+                  </div>
+                )}
+              </Section>
+
+              {/* ── Replicate (IA generativa) ── */}
+              <Section icon={<Image size={15} />} title="Replicate (imagen/video IA)">
+                <Toggle
+                  label="Enable Replicate tools"
+                  checked={config.tools.replicate?.enabled ?? false}
+                  onChange={(v) => updateReplicate({ enabled: v })}
+                />
+                {(config.tools.replicate?.enabled ?? false) && (
+                  <div className="flex flex-col gap-3">
+                    <div className="flex flex-col gap-1">
+                      <label className="text-xs text-gray-600 dark:text-zinc-300">API Key</label>
+                      <input
+                        type="password"
+                        value={config.tools.replicate?.api_key ?? ""}
+                        placeholder="r8_..."
+                        onChange={(e) => updateReplicate({ api_key: e.target.value })}
+                        className="px-2 py-1.5 text-xs rounded-lg border border-gray-200 dark:border-zinc-700 bg-white dark:bg-zinc-800 text-gray-800 dark:text-zinc-100 focus:outline-none focus:ring-1 focus:ring-emerald-400"
+                      />
+                    </div>
+                    <div className="flex flex-col gap-1">
+                      <label className="text-xs text-gray-600 dark:text-zinc-300">Modelo imagen por defecto</label>
+                      <input
+                        type="text"
+                        value={config.tools.replicate?.default_image_model ?? "black-forest-labs/flux-schnell"}
+                        placeholder="black-forest-labs/flux-schnell"
+                        onChange={(e) => updateReplicate({ default_image_model: e.target.value })}
+                        className="px-2 py-1.5 text-xs rounded-lg border border-gray-200 dark:border-zinc-700 bg-white dark:bg-zinc-800 text-gray-800 dark:text-zinc-100 focus:outline-none focus:ring-1 focus:ring-emerald-400"
+                      />
+                    </div>
+                    <div className="flex flex-col gap-1">
+                      <label className="text-xs text-gray-600 dark:text-zinc-300">Modelo video por defecto</label>
+                      <input
+                        type="text"
+                        value={config.tools.replicate?.default_video_model ?? "wan-ai/wan2.1-t2v-480p"}
+                        placeholder="wan-ai/wan2.1-t2v-480p"
+                        onChange={(e) => updateReplicate({ default_video_model: e.target.value })}
+                        className="px-2 py-1.5 text-xs rounded-lg border border-gray-200 dark:border-zinc-700 bg-white dark:bg-zinc-800 text-gray-800 dark:text-zinc-100 focus:outline-none focus:ring-1 focus:ring-emerald-400"
+                      />
+                    </div>
+                    <p className="text-[11px] text-gray-400 dark:text-zinc-500">
+                      Requiere: <code className="bg-zinc-100 dark:bg-zinc-800 px-1 rounded">pip install replicate</code>
+                    </p>
+                  </div>
                 )}
               </Section>
 

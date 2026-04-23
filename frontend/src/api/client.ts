@@ -162,6 +162,16 @@ export interface LocalForgeConfig {
       enabled: boolean;
       max_results: number;
     };
+    video: {
+      enabled: boolean;
+      ffmpeg_path: string;
+    };
+    replicate: {
+      enabled: boolean;
+      api_key: string;
+      default_image_model: string;
+      default_video_model: string;
+    };
     attachments: {
       max_image_mb: number;
       max_pdf_mb: number;

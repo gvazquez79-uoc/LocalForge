@@ -54,6 +54,14 @@ def get_enabled_tools() -> list[BaseTool]:
         from backend.tools.web_search import WEB_SEARCH_TOOLS
         tools.extend(WEB_SEARCH_TOOLS)
 
+    if cfg.tools.video.enabled:
+        from backend.tools.video import VIDEO_TOOLS
+        tools.extend(VIDEO_TOOLS)
+
+    if cfg.tools.replicate.enabled:
+        from backend.tools.replicate_tools import REPLICATE_TOOLS
+        tools.extend(REPLICATE_TOOLS)
+
     return tools
 
 

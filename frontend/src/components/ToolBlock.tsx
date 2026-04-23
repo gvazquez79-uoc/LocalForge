@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { ChevronDown, ChevronRight, Terminal, FileText, Search, Globe, FolderOpen, Trash2, PenLine, Loader2 } from "lucide-react";
+import { ChevronDown, ChevronRight, Terminal, FileText, Search, Globe, FolderOpen, Trash2, PenLine, Loader2, Film, Image, Scissors, Camera, Music } from "lucide-react";
 import type { ToolCallData } from "../api/client";
 
 interface ToolBlockProps {
@@ -15,7 +15,14 @@ const TOOL_META: Record<string, { icon: React.ReactNode; label: string; color: s
   list_directory:  { icon: <FolderOpen size={13} />, label: "Listando directorio",   color: "text-violet-500 dark:text-violet-400" },
   search_files:    { icon: <Search size={13} />,     label: "Buscando archivos",     color: "text-cyan-500 dark:text-cyan-400" },
   delete_file:     { icon: <Trash2 size={13} />,     label: "Eliminando archivo",    color: "text-red-500 dark:text-red-400" },
-  web_search:      { icon: <Globe size={13} />,      label: "Buscando en internet",  color: "text-sky-500 dark:text-sky-400" },
+  web_search:               { icon: <Globe size={13} />,    label: "Buscando en internet",       color: "text-sky-500 dark:text-sky-400" },
+  create_video_from_images: { icon: <Film size={13} />,    label: "Creando video",              color: "text-pink-500 dark:text-pink-400" },
+  convert_video:            { icon: <Film size={13} />,    label: "Convirtiendo video",         color: "text-pink-500 dark:text-pink-400" },
+  trim_video:               { icon: <Scissors size={13} />,label: "Recortando video",           color: "text-pink-500 dark:text-pink-400" },
+  extract_frames:           { icon: <Camera size={13} />,  label: "Extrayendo fotogramas",      color: "text-pink-400 dark:text-pink-300" },
+  add_audio_to_video:       { icon: <Music size={13} />,   label: "Añadiendo audio al video",   color: "text-pink-500 dark:text-pink-400" },
+  generate_image:           { icon: <Image size={13} />,   label: "Generando imagen con IA",    color: "text-fuchsia-500 dark:text-fuchsia-400" },
+  generate_video:           { icon: <Film size={13} />,    label: "Generando video con IA",     color: "text-fuchsia-500 dark:text-fuchsia-400" },
 };
 
 const DEFAULT_META = { icon: <Terminal size={13} />, label: "Ejecutando herramienta", color: "text-gray-500 dark:text-zinc-400" };
