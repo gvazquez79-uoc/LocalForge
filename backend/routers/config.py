@@ -185,6 +185,135 @@ async def clear_memory():
     return {"ok": True}
 
 
+@router.get("/project-instructions")
+async def get_project_instructions(working_directory: str):
+    """Return the contents of LOCALFORGE.md (or CLAUDE.md) from the project root."""
+    from pathlib import Path
+    wd = Path(working_directory).expanduser()
+    for filename in ("LOCALFORGE.md", "localforge.md", "CLAUDE.md", ".claude.md"):
+        candidate = wd / filename
+        if candidate.exists():
+            try:
+                return {
+                    "content": candidate.read_text(encoding="utf-8"),
+                    "filename": filename,
+                    "path": str(candidate),
+                    "exists": True,
+                }
+            except Exception:
+                pass
+    return {
+        "content": "",
+        "filename": "LOCALFORGE.md",
+        "path": str(wd / "LOCALFORGE.md"),
+        "exists": False,
+    }
+
+
+@router.put("/project-instructions")
+async def save_project_instructions(body: dict):
+    """Write LOCALFORGE.md to the project root."""
+    from pathlib import Path
+    working_directory = body.get("working_directory", "")
+    content = body.get("content", "")
+    filename = body.get("filename", "LOCALFORGE.md")
+    if not working_directory:
+        from fastapi import HTTPException
+        raise HTTPException(status_code=400, detail="working_directory required")
+    path = Path(working_directory).expanduser() / filename
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(content, encoding="utf-8")
+    return {"ok": True, "path": str(path)}
+
+
+@router.post("/providers/{provider_name}/discover-models")
+async def discover_provider_models(provider_name: str):
+    """Discover and load available models from a provider."""
+    import os
+    from fastapi import HTTPException
+    from backend.db.providers_store import list_providers
+    from backend.db.models_store import list_models_masked, create_model
+    from backend.config import refresh_models_from_db, _PROVIDER_KEYS
+
+    # Load provider from DB
+    all_providers = await list_providers()
+    provider = next((p for p in all_providers if p["name"] == provider_name), None)
+    if not provider:
+        raise HTTPException(status_code=404, detail=f"Provider '{provider_name}' not found")
+
+    # Get API key: DB key takes priority, then env cache, then raw env var
+    api_key = (
+        _PROVIDER_KEYS.get(provider_name)
+        or os.environ.get(provider.get("api_key_env") or "", "")
+    )
+
+    discovered: list[dict] = []
+
+    try:
+        if provider_name == "anthropic":
+            if not api_key:
+                raise ValueError("API key de Anthropic no configurada. Ve a Settings → Providers → Anthropic y añade tu key.")
+            discovered = [
+                {"name": "claude-opus-4-5",          "display_name": "Claude Opus 4.5"},
+                {"name": "claude-sonnet-4-5",         "display_name": "Claude Sonnet 4.5"},
+                {"name": "claude-haiku-4-5-20251001", "display_name": "Claude Haiku 4.5"},
+            ]
+
+        elif provider_name == "ollama":
+            base_url = provider.get("base_url") or "http://localhost:11434/v1"
+            discovered = await _discover_ollama_models(base_url)
+
+        elif provider_name == "openai":
+            if not api_key:
+                raise ValueError("API key de OpenAI no configurada.")
+            base_url = provider.get("base_url") or "https://api.openai.com/v1"
+            async with httpx.AsyncClient(timeout=5.0) as client:
+                resp = await client.get(f"{base_url}/models", headers={"Authorization": f"Bearer {api_key}"})
+                resp.raise_for_status()
+                discovered = [
+                    {"name": m["id"], "display_name": m["id"]}
+                    for m in resp.json().get("data", [])
+                    if "gpt" in m["id"].lower()
+                ]
+
+        elif provider_name == "groq":
+            if not api_key:
+                raise ValueError("API key de Groq no configurada.")
+            async with httpx.AsyncClient(timeout=5.0) as client:
+                resp = await client.get("https://api.groq.com/openai/v1/models", headers={"Authorization": f"Bearer {api_key}"})
+                resp.raise_for_status()
+                discovered = [
+                    {"name": m["id"], "display_name": m["id"]}
+                    for m in resp.json().get("data", [])
+                ]
+
+        else:
+            raise HTTPException(status_code=400, detail=f"Discovery no soportado para '{provider_name}'")
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e)[:300])
+
+    # Save to DB, skip duplicates
+    existing_names = {m["name"] for m in await list_models_masked()}
+    saved_count = 0
+    for model in discovered:
+        if model["name"] not in existing_names:
+            await create_model(
+                name=model["name"],
+                display_name=model["display_name"],
+                provider=provider_name,
+                base_url=provider.get("base_url") or None,
+            )
+            saved_count += 1
+
+    if saved_count > 0:
+        await refresh_models_from_db()
+
+    return {"ok": True, "discovered": len(discovered), "saved": saved_count, "models": discovered}
+
+
 @router.post("/telegram/restart")
 async def restart_telegram():
     """Stop and restart the Telegram bot with the current config (no backend restart needed)."""

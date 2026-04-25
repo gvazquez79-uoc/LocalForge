@@ -33,6 +33,7 @@ from backend.db.store import (
     get_messages,
     list_conversations,
     update_conversation_title,
+    update_working_directory,
 )
 from backend.models.registry import get_adapter
 
@@ -144,6 +145,14 @@ async def rename_conv(conv_id: str, body: dict):
     return {"ok": True}
 
 
+@router.patch("/{conv_id}/working_directory")
+async def set_working_dir(conv_id: str, body: dict):
+    """Set or clear the working directory for a conversation."""
+    working_directory = body.get("working_directory")  # None = clear
+    await update_working_directory(conv_id, working_directory or None)
+    return {"ok": True, "working_directory": working_directory}
+
+
 @router.post("/{conv_id}/approve")
 async def approve_tool(conv_id: str, body: ApproveRequest):
     """Unblock the agent loop waiting for this tool_use_id."""
@@ -228,7 +237,12 @@ async def send_message(conv_id: str, body: SendMessageRequest):
             finally:
                 _approval_events.pop(key, None)
 
-        async for event in run_agent(messages, adapter, request_approval=_request_approval):
+        working_directory = conv.get("working_directory")
+        async for event in run_agent(
+            messages, adapter,
+            request_approval=_request_approval,
+            working_directory=working_directory,
+        ):
             payload = json.dumps({"type": event.type, "data": event.data})
             yield f"data: {payload}\n\n"
 

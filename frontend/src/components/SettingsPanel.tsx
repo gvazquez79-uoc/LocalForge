@@ -24,11 +24,13 @@ import {
   ChevronUp,
   Film,
   Image,
+  Download,
+  Loader,
 } from "lucide-react";
 import {
   getConfig, saveConfig, restartTelegramBot,
   listDbModels, createDbModel, updateDbModel, deleteDbModel, setDefaultDbModel, testDbModel,
-  listProviders, createProvider, updateProvider, deleteProvider,
+  listProviders, createProvider, updateProvider, deleteProvider, discoverProviderModels,
   getMemory, clearMemory,
 } from "../api/client";
 import type { LocalForgeConfig, DbModel, DbProvider, DbProviderUpdate } from "../api/client";
@@ -139,6 +141,8 @@ export function SettingsPanel({ open, onClose }: SettingsPanelProps) {
   const [showProviderKey, setShowProviderKey] = useState(false);
   const [providerSaving, setProviderSaving] = useState(false);
   const [providerError, setProviderError] = useState<string | null>(null);
+  const [discoveringProvider, setDiscoveringProvider] = useState<string | null>(null);
+  const [discoverMessage, setDiscoverMessage] = useState<string | null>(null);
 
   // Build base_url lookup from loaded providers
   const providerUrlMap: Record<string, string> = Object.fromEntries(
@@ -264,6 +268,24 @@ export function SettingsPanel({ open, onClose }: SettingsPanelProps) {
         setProviders(ps => ps.filter(p => p.id !== id));
       },
     );
+  };
+
+  const handleDiscoverModels = async (providerName: string) => {
+    setDiscoveringProvider(providerName);
+    setDiscoverMessage(null);
+    try {
+      const result = await discoverProviderModels(providerName);
+      setDiscoverMessage(`✅ Descubridos ${result.discovered} modelos, guardados ${result.saved} nuevos.`);
+      // Reload models in the sidebar
+      listDbModels().then(ms => setDbModels(ms));
+      // Clear message after 5 seconds
+      setTimeout(() => setDiscoverMessage(null), 5000);
+    } catch (error) {
+      setDiscoverMessage(`❌ Error: ${error instanceof Error ? error.message : String(error)}`);
+      setTimeout(() => setDiscoverMessage(null), 6000);
+    } finally {
+      setDiscoveringProvider(null);
+    }
   };
 
   const handleModelSave = async () => {
@@ -698,6 +720,20 @@ export function SettingsPanel({ open, onClose }: SettingsPanelProps) {
                         </div>
                       </div>
                       <div className="flex items-center gap-1 flex-shrink-0">
+                        {(p.api_key_masked || p.api_key_env) && (
+                          <button
+                            title="Load models for this provider"
+                            onClick={() => handleDiscoverModels(p.name)}
+                            disabled={discoveringProvider === p.name}
+                            className="p-1 rounded text-gray-400 hover:text-blue-500 dark:text-zinc-500 dark:hover:text-blue-400 transition-colors disabled:opacity-50"
+                          >
+                            {discoveringProvider === p.name ? (
+                              <Loader size={12} className="animate-spin" />
+                            ) : (
+                              <Download size={12} />
+                            )}
+                          </button>
+                        )}
                         <button
                           title="Edit"
                           onClick={() => openProviderEdit(p)}
@@ -718,6 +754,12 @@ export function SettingsPanel({ open, onClose }: SettingsPanelProps) {
                     </div>
                   ))}
                 </div>
+
+                {discoverMessage && (
+                  <div className={`text-xs p-2 rounded-sm ${discoverMessage.startsWith("✅") ? "bg-green-50 dark:bg-green-950/20 text-green-700 dark:text-green-300" : "bg-red-50 dark:bg-red-950/20 text-red-700 dark:text-red-300"}`}>
+                    {discoverMessage}
+                  </div>
+                )}
 
                 {providerFormOpen ? (
                   <div className="border border-emerald-200 dark:border-emerald-800/50 rounded-sm p-3 space-y-2.5 bg-emerald-50/50 dark:bg-emerald-950/20">

@@ -48,6 +48,26 @@ export function ModelSelector({ onOpenSettings }: { onOpenSettings?: () => void 
     );
   }
 
+  // Group models by provider for better organization
+  const groupedModels = models.reduce((acc, m) => {
+    const provider = m.provider || "otro";
+    if (!acc[provider]) acc[provider] = [];
+    acc[provider].push(m);
+    return acc;
+  }, {} as Record<string, typeof models>);
+
+  const providerLabels: Record<string, string> = {
+    anthropic: "🤖 Anthropic (Claude)",
+    ollama: "🦙 Ollama (Local)",
+    openai: "🔵 OpenAI",
+    groq: "⚡ Groq",
+    openrouter: "🌐 OpenRouter",
+    together: "👥 Together.ai",
+    mistral: "🟠 Mistral",
+    deepseek: "🧠 DeepSeek",
+    otro: "📌 Otro",
+  };
+
   return (
     <div className="flex items-center gap-2">
       <Cpu size={13} className="text-gray-400 dark:text-zinc-500 flex-shrink-0" />
@@ -56,10 +76,14 @@ export function ModelSelector({ onOpenSettings }: { onOpenSettings?: () => void 
         onChange={(e) => setModel(e.target.value)}
         className="flex-1 bg-white border border-gray-300 dark:bg-zinc-800 dark:border-zinc-700 rounded-sm px-2 py-1.5 text-xs text-gray-700 dark:text-zinc-300 focus:outline-none focus:border-emerald-500 cursor-pointer"
       >
-        {models.map((m) => (
-          <option key={m.name} value={m.name} disabled={!m.available}>
-            {m.display_name}{!m.available ? " (sin clave)" : ""}
-          </option>
+        {Object.entries(groupedModels).map(([provider, providerModels]) => (
+          <optgroup key={provider} label={providerLabels[provider] || provider}>
+            {providerModels.map((m) => (
+              <option key={m.name} value={m.name} disabled={!m.available}>
+                {m.display_name}{!m.available ? " (sin clave)" : ""}
+              </option>
+            ))}
+          </optgroup>
         ))}
       </select>
     </div>

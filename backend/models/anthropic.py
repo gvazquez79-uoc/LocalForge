@@ -20,13 +20,28 @@ class AnthropicAdapter(BaseModelAdapter):
         tools: list[dict],
         system: str,
     ) -> AsyncIterator[StreamEvent]:
+        import logging
+        logger = logging.getLogger(__name__)
+
         try:
             import anthropic
         except ImportError:
             yield StreamEvent(type="error", data={"message": "anthropic package not installed"})
             return
 
-        client = anthropic.AsyncAnthropic(api_key=self._api_key)
+        logger.info(f"AnthropicAdapter.stream_chat: model={self.model_name}, api_key_set={bool(self._api_key)}")
+
+        if not self._api_key:
+            logger.error("API key is empty!")
+            yield StreamEvent(type="error", data={"message": "❌ API key vacía. Configura tu Anthropic API key en Settings → Providers → Anthropic"})
+            return
+
+        try:
+            client = anthropic.AsyncAnthropic(api_key=self._api_key)
+        except Exception as e:
+            logger.error(f"Failed to create Anthropic client: {e}")
+            yield StreamEvent(type="error", data={"message": f"Failed to create Anthropic client: {e}"})
+            return
 
         # Convert messages to Anthropic format
         anthropic_messages = _to_anthropic_messages(messages)
@@ -40,63 +55,64 @@ class AnthropicAdapter(BaseModelAdapter):
         if tools:
             kwargs["tools"] = tools
 
+        logger.info(f"Sending to Anthropic: model={self.model_name} tools={len(tools)} msgs={len(messages)}")
+
         try:
             async with client.messages.stream(**kwargs) as stream:
-                current_tool_id = None
-                current_tool_name = None
-                current_tool_input_json = ""
+                # Stream text deltas in real time
+                async for text_chunk in stream.text_stream:
+                    yield StreamEvent(type="text_delta", data={"text": text_chunk})
 
-                async for event in stream:
-                    event_type = type(event).__name__
+                # Get the complete final message (all tool calls fully parsed)
+                final = await stream.get_final_message()
+                block_summary = [(b.type, getattr(b, 'name', '')) for b in final.content]
+                logger.info(
+                    f"Final message: stop_reason={final.stop_reason} "
+                    f"content_blocks={block_summary} usage={final.usage}"
+                )
 
-                    if event_type == "RawContentBlockStartEvent":
-                        block = event.content_block
-                        if block.type == "tool_use":
-                            current_tool_id = block.id
-                            current_tool_name = block.name
-                            current_tool_input_json = ""
+                # Emit tool calls from the final message
+                for block in final.content:
+                    if block.type == "tool_use":
+                        logger.info(f"Tool call: {block.name} input={block.input}")
+                        yield StreamEvent(
+                            type="tool_call",
+                            data={
+                                "id": block.id,
+                                "name": block.name,
+                                "input": block.input,
+                            },
+                        )
 
-                    elif event_type == "RawContentBlockDeltaEvent":
-                        delta = event.delta
-                        if delta.type == "text_delta":
-                            yield StreamEvent(type="text_delta", data={"text": delta.text})
-                        elif delta.type == "input_json_delta":
-                            current_tool_input_json += delta.partial_json
-
-                    elif event_type == "RawContentBlockStopEvent":
-                        if current_tool_name is not None:
-                            import json
-                            try:
-                                tool_input = json.loads(current_tool_input_json) if current_tool_input_json else {}
-                            except json.JSONDecodeError:
-                                tool_input = {}
-                            yield StreamEvent(
-                                type="tool_call",
-                                data={
-                                    "id": current_tool_id,
-                                    "name": current_tool_name,
-                                    "input": tool_input,
-                                },
-                            )
-                            current_tool_id = None
-                            current_tool_name = None
-                            current_tool_input_json = ""
-
-                    elif event_type == "RawMessageStopEvent":
-                        final = await stream.get_final_message()
-                        yield StreamEvent(type="done", data={"stop_reason": final.stop_reason})
-                        if final.usage:
-                            yield StreamEvent(type="usage", data={
-                                "input_tokens": final.usage.input_tokens,
-                                "output_tokens": final.usage.output_tokens,
-                            })
-
-        except anthropic.AuthenticationError:
-            yield StreamEvent(type="error", data={"message": "Invalid Anthropic API key"})
+                yield StreamEvent(type="done", data={"stop_reason": final.stop_reason})
+                if final.usage:
+                    yield StreamEvent(type="usage", data={
+                        "input_tokens": final.usage.input_tokens,
+                        "output_tokens": final.usage.output_tokens,
+                    })
+        except anthropic.AuthenticationError as e:
+            logger.error(f"AuthenticationError: {e}")
+            yield StreamEvent(type="error", data={"message": "🔐 API key inválida. Verifica tu Anthropic API key en Settings → Providers"})
+        except anthropic.BadRequestError as e:
+            msg = str(e)
+            logger.error(f"BadRequestError: {e}")
+            if "credit balance" in msg or "too low" in msg:
+                yield StreamEvent(type="error", data={"message": "💳 Sin créditos en Anthropic. Ve a console.anthropic.com → Plans & Billing para recargar."})
+            else:
+                yield StreamEvent(type="error", data={"message": f"❌ Petición inválida: {msg[:200]}"})
+        except anthropic.RateLimitError as e:
+            msg = str(e)
+            logger.error(f"RateLimitError: {e}")
+            yield StreamEvent(type="error", data={"message": "⏱️ Rate limit alcanzado. Usa Sonnet en lugar de Opus (límites mucho más altos), o espera un minuto e inténtalo de nuevo."})
+        except anthropic.NotFoundError as e:
+            logger.error(f"NotFoundError (modelo no existe): {e}")
+            yield StreamEvent(type="error", data={"message": f"❌ El modelo '{self.model_name}' no existe en Anthropic. Verifica el nombre exacto."})
         except anthropic.APIConnectionError as e:
-            yield StreamEvent(type="error", data={"message": f"Connection error: {e}"})
+            logger.error(f"APIConnectionError: {e}")
+            yield StreamEvent(type="error", data={"message": f"🌐 Error de conexión con Anthropic API. ¿Tienes internet? Detalles: {str(e)[:100]}"})
         except Exception as e:
-            yield StreamEvent(type="error", data={"message": str(e)})
+            logger.error(f"Unexpected error in Anthropic stream: {type(e).__name__}: {e}", exc_info=True)
+            yield StreamEvent(type="error", data={"message": f"⚠️ Error: {str(e)[:200]}"})
 
 
 def _to_anthropic_messages(messages: list[dict]) -> list[dict]:

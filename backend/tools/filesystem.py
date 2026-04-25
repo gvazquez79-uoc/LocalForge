@@ -1,16 +1,22 @@
 """
 Filesystem tools: read, write, list, search files.
-Respects allowed_paths from config.
+Respects allowed_paths from config, plus an optional per-conversation
+working_directory injected via contextvars (set by the agent loop).
 """
 from __future__ import annotations
 
-import glob
+import glob as glob_module
 import os
+from contextvars import ContextVar
 from pathlib import Path
 from typing import Any
 
 from backend.config import get_config
 from backend.tools.base import BaseTool
+
+# Per-async-task working directory (set by loop.py when a conversation has one).
+# Using ContextVar ensures concurrent conversations don't interfere.
+_conv_working_dir: ContextVar[Path | None] = ContextVar("_conv_working_dir", default=None)
 
 
 def _is_under(child: Path, parent: Path) -> bool:
@@ -34,6 +40,10 @@ def _resolve_and_check(path: str) -> Path:
     """Resolve path and verify it's inside an allowed directory."""
     resolved = Path(path).expanduser().resolve()
     allowed = get_config().resolve_allowed_paths()
+    # Per-conversation working directory takes priority
+    wd = _conv_working_dir.get()
+    if wd:
+        allowed = [wd] + allowed
     for allowed_path in allowed:
         if _is_under(resolved, allowed_path):
             return resolved
@@ -269,6 +279,207 @@ class DeleteFileTool(BaseTool):
 
 
 # Registry of all filesystem tools
+class GlobTool(BaseTool):
+    name = "glob"
+    description = (
+        "Find files matching a glob pattern (e.g. '**/*.py', 'src/**/*.tsx', '*.json'). "
+        "Returns a list of matching file paths sorted by modification time (newest first). "
+        "Use this to quickly locate files by name pattern across a project."
+    )
+    parameters = {
+        "type": "object",
+        "properties": {
+            "pattern": {
+                "type": "string",
+                "description": "Glob pattern, e.g. '**/*.py' or 'src/**/*.ts'",
+            },
+            "path": {
+                "type": "string",
+                "description": "Root directory to search in. Defaults to working directory or first allowed path.",
+            },
+        },
+        "required": ["pattern"],
+    }
+
+    async def run(self, pattern: str, path: str | None = None) -> str:
+        import fnmatch
+
+        # Determine root directory
+        wd = _conv_working_dir.get()
+        if path:
+            root = _resolve_and_check(path)
+        elif wd:
+            root = wd
+        else:
+            allowed = get_config().resolve_allowed_paths()
+            if not allowed:
+                return "Error: no working directory or allowed path configured."
+            root = allowed[0]
+
+        # Use Python's glob with recursive support
+        full_pattern = str(root / pattern) if not os.path.isabs(pattern) else pattern
+        matches = glob_module.glob(full_pattern, recursive=True)
+
+        # Filter out excluded dirs and verify permissions
+        results = []
+        for match in matches:
+            p = Path(match)
+            # Skip excluded directories anywhere in the path
+            if any(part in _EXCLUDED_DIRS for part in p.parts):
+                continue
+            try:
+                _resolve_and_check(str(p))
+                results.append(p)
+            except PermissionError:
+                continue
+
+        if not results:
+            return f"No files found matching '{pattern}' in {root}"
+
+        # Sort by modification time, newest first
+        results.sort(key=lambda p: p.stat().st_mtime if p.exists() else 0, reverse=True)
+
+        lines = [str(p) for p in results[:500]]  # cap at 500
+        summary = f"{len(results)} file(s) found"
+        if len(results) > 500:
+            summary += " (showing first 500)"
+        return summary + ":\n" + "\n".join(lines)
+
+
+class GrepTool(BaseTool):
+    name = "grep"
+    description = (
+        "Search for a regex pattern in file contents. Returns matching lines with file path and line number. "
+        "Use this to find where a function, variable, or string is used across a codebase. "
+        "Supports recursive search with optional file glob filter."
+    )
+    parameters = {
+        "type": "object",
+        "properties": {
+            "pattern": {
+                "type": "string",
+                "description": "Regex pattern to search for, e.g. 'def my_function' or 'import.*react'",
+            },
+            "path": {
+                "type": "string",
+                "description": "File or directory to search in. Defaults to working directory.",
+            },
+            "glob": {
+                "type": "string",
+                "description": "Glob filter for filenames, e.g. '*.py' or '*.{ts,tsx}'",
+            },
+            "case_sensitive": {
+                "type": "boolean",
+                "description": "Case sensitive search. Default true.",
+            },
+            "context_lines": {
+                "type": "integer",
+                "description": "Number of lines of context to show around each match (0-5). Default 0.",
+            },
+        },
+        "required": ["pattern"],
+    }
+
+    async def run(
+        self,
+        pattern: str,
+        path: str | None = None,
+        glob: str | None = None,
+        case_sensitive: bool = True,
+        context_lines: int = 0,
+    ) -> str:
+        import re
+        import asyncio
+
+        # Determine root
+        wd = _conv_working_dir.get()
+        if path:
+            root = _resolve_and_check(path)
+        elif wd:
+            root = wd
+        else:
+            allowed = get_config().resolve_allowed_paths()
+            if not allowed:
+                return "Error: no working directory or allowed path configured."
+            root = allowed[0]
+
+        # Try ripgrep first (fast), fall back to Python (always available)
+        try:
+            rg_args = ["rg", "--line-number", "--no-heading", "--color=never"]
+            if not case_sensitive:
+                rg_args.append("--ignore-case")
+            if context_lines > 0:
+                rg_args += [f"--context={min(context_lines, 5)}"]
+            if glob:
+                rg_args += ["--glob", glob]
+            rg_args += ["--", pattern, str(root)]
+
+            proc = await asyncio.create_subprocess_exec(
+                *rg_args,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+            )
+            stdout, _ = await asyncio.wait_for(proc.communicate(), timeout=15.0)
+            output = stdout.decode("utf-8", errors="replace").strip()
+            if output:
+                lines = output.split("\n")
+                if len(lines) > 300:
+                    output = "\n".join(lines[:300]) + f"\n… ({len(lines) - 300} more lines)"
+                return output or "No matches found."
+            if proc.returncode == 0 or proc.returncode == 1:
+                return "No matches found."
+        except (FileNotFoundError, asyncio.TimeoutError):
+            pass  # ripgrep not available, fall back
+
+        # Python fallback
+        flags = 0 if case_sensitive else re.IGNORECASE
+        try:
+            compiled = re.compile(pattern, flags)
+        except re.error as e:
+            return f"Invalid regex: {e}"
+
+        root_path = root if root.is_dir() else root.parent
+        results = []
+        max_results = 300
+
+        def _collect_files(base: Path) -> list[Path]:
+            files = []
+            for dirpath, dirnames, filenames in os.walk(base):
+                dirnames[:] = [d for d in dirnames if d not in _EXCLUDED_DIRS]
+                for fname in filenames:
+                    if glob:
+                        import fnmatch as _fn
+                        if not _fn.fnmatch(fname, glob):
+                            continue
+                    files.append(Path(dirpath) / fname)
+            return files
+
+        target_files = [root_path] if root_path.is_file() else _collect_files(root_path)
+
+        for file_path in target_files:
+            if len(results) >= max_results:
+                break
+            try:
+                _resolve_and_check(str(file_path))
+            except PermissionError:
+                continue
+            try:
+                text = file_path.read_text(encoding="utf-8", errors="replace")
+                file_lines = text.splitlines()
+                for i, line in enumerate(file_lines, 1):
+                    if compiled.search(line):
+                        results.append(f"{file_path}:{i}: {line}")
+                        if len(results) >= max_results:
+                            break
+            except Exception:
+                continue
+
+        if not results:
+            return "No matches found."
+        suffix = f"\n… (showing first {max_results})" if len(results) >= max_results else ""
+        return "\n".join(results) + suffix
+
+
 FILESYSTEM_TOOLS: list[BaseTool] = [
     ReadFileTool(),
     WriteFileTool(),
@@ -276,4 +487,6 @@ FILESYSTEM_TOOLS: list[BaseTool] = [
     ListDirectoryTool(),
     SearchFilesTool(),
     DeleteFileTool(),
+    GlobTool(),
+    GrepTool(),
 ]

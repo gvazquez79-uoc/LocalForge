@@ -207,7 +207,9 @@ export const Message = memo(function Message({ message }: MessageProps) {
         {(visibleContent || (message.isStreaming && !isThinking)) && (
           <div
             className={`px-4 py-3 rounded-2xl text-sm leading-relaxed ${
-              isUser
+              visibleContent?.includes("⚠️ **Error:**")
+                ? "bg-red-50 text-red-900 rounded-tl-sm dark:bg-red-900/20 dark:text-red-200 border border-red-200 dark:border-red-800"
+                : isUser
                 ? "bg-emerald-600 text-white rounded-tr-sm"
                 : "bg-gray-100 text-gray-900 rounded-tl-sm dark:bg-zinc-800 dark:text-zinc-100"
             }`}

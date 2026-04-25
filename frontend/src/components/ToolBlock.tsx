@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { ChevronDown, ChevronRight, Terminal, FileText, Search, Globe, FolderOpen, Trash2, PenLine, Loader2, Film, Image, Scissors, Camera, Music } from "lucide-react";
+import { ChevronDown, ChevronRight, Terminal, FileText, Search, Globe, FolderOpen, Trash2, PenLine, Loader2, Film, Image, Scissors, Camera, Music, ScanSearch, Link } from "lucide-react";
 import type { ToolCallData } from "../api/client";
 
 interface ToolBlockProps {
@@ -15,7 +15,10 @@ const TOOL_META: Record<string, { icon: React.ReactNode; label: string; color: s
   list_directory:  { icon: <FolderOpen size={13} />, label: "Listando directorio",   color: "text-violet-500 dark:text-violet-400" },
   search_files:    { icon: <Search size={13} />,     label: "Buscando archivos",     color: "text-cyan-500 dark:text-cyan-400" },
   delete_file:     { icon: <Trash2 size={13} />,     label: "Eliminando archivo",    color: "text-red-500 dark:text-red-400" },
+  glob:                     { icon: <ScanSearch size={13} />, label: "Buscando por patrón",      color: "text-cyan-500 dark:text-cyan-400" },
+  grep:                     { icon: <Search size={13} />,    label: "Buscando en código",        color: "text-cyan-600 dark:text-cyan-300" },
   web_search:               { icon: <Globe size={13} />,    label: "Buscando en internet",       color: "text-sky-500 dark:text-sky-400" },
+  web_fetch:                { icon: <Link size={13} />,     label: "Leyendo URL",                color: "text-sky-400 dark:text-sky-300" },
   create_video_from_images: { icon: <Film size={13} />,    label: "Creando video",              color: "text-pink-500 dark:text-pink-400" },
   convert_video:            { icon: <Film size={13} />,    label: "Convirtiendo video",         color: "text-pink-500 dark:text-pink-400" },
   trim_video:               { icon: <Scissors size={13} />,label: "Recortando video",           color: "text-pink-500 dark:text-pink-400" },

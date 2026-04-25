@@ -59,6 +59,7 @@ export interface Conversation {
   model: string;
   created_at: number;
   updated_at: number;
+  working_directory?: string | null;
   messages?: Message[];
 }
 
@@ -129,6 +130,14 @@ export async function renameConversation(id: string, title: string): Promise<voi
     method: "PATCH",
     headers: { "Content-Type": "application/json", ...authHeaders() },
     body: JSON.stringify({ title }),
+  });
+}
+
+export async function setWorkingDirectory(id: string, working_directory: string | null): Promise<void> {
+  await fetch(`${BASE}/conversations/${id}/working_directory`, {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json", ...authHeaders() },
+    body: JSON.stringify({ working_directory }),
   });
 }
 
@@ -227,6 +236,35 @@ export async function clearMemory(): Promise<void> {
   const res = await fetch(`${BASE}/config/memory`, {
     method: "DELETE",
     headers: authHeaders(),
+  });
+  if (!res.ok) throw new Error(await res.text());
+}
+
+export interface ProjectInstructions {
+  content: string;
+  filename: string;
+  path: string;
+  exists: boolean;
+}
+
+export async function getProjectInstructions(workingDirectory: string): Promise<ProjectInstructions> {
+  const res = await fetch(
+    `${BASE}/config/project-instructions?working_directory=${encodeURIComponent(workingDirectory)}`,
+    { headers: authHeaders() }
+  );
+  if (!res.ok) throw new Error(await res.text());
+  return res.json();
+}
+
+export async function saveProjectInstructions(
+  workingDirectory: string,
+  content: string,
+  filename = "LOCALFORGE.md"
+): Promise<void> {
+  const res = await fetch(`${BASE}/config/project-instructions`, {
+    method: "PUT",
+    headers: { "Content-Type": "application/json", ...authHeaders() },
+    body: JSON.stringify({ working_directory: workingDirectory, content, filename }),
   });
   if (!res.ok) throw new Error(await res.text());
 }
@@ -346,6 +384,22 @@ export async function testDbModel(id: string): Promise<TestModelResult> {
     method: "POST",
     headers: authHeaders(),
   });
+  return res.json();
+}
+
+export interface DiscoverModelsResult {
+  ok: boolean;
+  discovered: number;
+  saved: number;
+  models: Array<{ name: string; display_name: string }>;
+}
+
+export async function discoverProviderModels(providerName: string): Promise<DiscoverModelsResult> {
+  const res = await fetch(`${BASE}/config/providers/${providerName}/discover-models`, {
+    method: "POST",
+    headers: authHeaders(),
+  });
+  if (!res.ok) throw new Error(await res.text());
   return res.json();
 }
 

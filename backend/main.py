@@ -29,6 +29,7 @@ from backend.routers.models import router as models_router
 from backend.routers.providers import router as providers_router
 from backend.routers.stats import router as stats_router
 from backend.routers.logs import router as logs_router
+from backend.routers.permissions import router as permissions_router
 
 
 @asynccontextmanager
@@ -64,6 +65,10 @@ async def lifespan(app: FastAPI):
     await init_providers_table()
     await seed_providers()
     await refresh_providers_cache()
+
+    # Init permissions table
+    from backend.db.permissions_store import init_permissions_table
+    await init_permissions_table()
 
     # Init models table and seed from localforge.json if empty
     # refresh_models_from_db runs AFTER refresh_config_from_db so DB models win
@@ -118,6 +123,7 @@ app.include_router(models_router,    prefix="/api")
 app.include_router(providers_router, prefix="/api")
 app.include_router(stats_router,     prefix="/api")
 app.include_router(logs_router,      prefix="/api")
+app.include_router(permissions_router, prefix="/api")
 
 
 @app.post("/api/dev/restart")

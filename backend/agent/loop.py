@@ -20,6 +20,26 @@ def _get_memory_path() -> Path:
     return Path(get_config().agent.memory_file).expanduser()
 
 
+def _load_project_instructions(working_directory: str) -> str:
+    """Load LOCALFORGE.md (or CLAUDE.md fallback) from the project root."""
+    wd = Path(working_directory).expanduser()
+    for filename in ("LOCALFORGE.md", "localforge.md", "CLAUDE.md", ".claude.md"):
+        candidate = wd / filename
+        if candidate.exists():
+            try:
+                content = candidate.read_text(encoding="utf-8").strip()
+                if content:
+                    return (
+                        f"\n\n---\n"
+                        f"**INSTRUCCIONES DEL PROYECTO** (`{filename}`):\n\n"
+                        f"{content}\n"
+                        f"---"
+                    )
+            except Exception:
+                pass
+    return ""
+
+
 def _load_memory() -> str:
     """Load persistent memory and return it as a system prompt addendum."""
     memory_file = _get_memory_path()
@@ -53,6 +73,8 @@ def get_enabled_tools() -> list[BaseTool]:
     if cfg.tools.web_search.enabled:
         from backend.tools.web_search import WEB_SEARCH_TOOLS
         tools.extend(WEB_SEARCH_TOOLS)
+        from backend.tools.web_fetch import WEB_FETCH_TOOLS
+        tools.extend(WEB_FETCH_TOOLS)
 
     if cfg.tools.video.enabled:
         from backend.tools.video import VIDEO_TOOLS
@@ -257,6 +279,32 @@ _HALLUCINATION_PATTERNS = [
     "remember, i can",
     "just say \"yes\"",
     "just say 'yes'",
+    # Lazy data analysis — model claims to "analyze" without citing real values
+    "he analizado la información",
+    "he analizado los datos",
+    "basándome en los nombres de las columnas",
+    "con base en los nombres de las columnas",
+    "según los nombres de las columnas",
+    "a partir de los nombres de las columnas",
+    "posibles insights que se podrían",
+    "posibles análisis que se podrían",
+    "lo que podría contener el dataset",
+    # "Let me..." announcements without tool call (ES)
+    "déjame ver",
+    "dejame ver",
+    "déjame revisar",
+    "dejame revisar",
+    "déjame comprobar",
+    "déjame leer",
+    "déjame explorar",
+    "permíteme ver",
+    "permíteme revisar",
+    "primero voy a ver",
+    "primero veré",
+    "empezaré por",
+    "comenzaré por",
+    "vamos a ver",
+    "vamos a revisar",
     # Future-tense announcements without tool call (ES) — "going to do X" but didn't
     "voy a revisar",
     "voy a leer",
@@ -314,6 +362,43 @@ _HALLUCINATION_PATTERNS = [
     "let me modify",
     "let me check",
     "let me look at",
+    # Presenting invented results as if they came from a tool (ES)
+    "aquí están los archivos",
+    "aquí está la lista de archivos",
+    "aquí tienes los archivos",
+    "aquí está la lista de los archivos",
+    "aquí están las carpetas",
+    "aquí están los ficheros",
+    "aquí está el contenido del directorio",
+    "aquí están los contenidos",
+    "el directorio contiene los siguientes",
+    "en el directorio se encuentran",
+    "en el directorio hay",
+    "estos son los archivos",
+    "estos son los ficheros",
+    "los archivos del proyecto son",
+    "los archivos en el directorio",
+    "las carpetas del proyecto son",
+    "la estructura del proyecto",
+    "la estructura de archivos",
+    "la estructura es la siguiente",
+    "aquí está la estructura",
+    "contenido de la carpeta",
+    "contenido del directorio",
+    "lista de archivos",
+    "lista de carpetas",
+    "lista de ficheros",
+    # Presenting invented results as if they came from a tool (EN)
+    "here are the files",
+    "here are the folders",
+    "here is the directory",
+    "here is the content",
+    "the directory contains",
+    "the project structure",
+    "the file structure",
+    "these are the files",
+    "files in the directory",
+    "list of files",
     # False refusals — model claims it cannot access files/filesystem when it has tools (ES)
     "no puedo ver ni acceder",
     "no puedo acceder a los archivos",
@@ -436,17 +521,51 @@ def _is_capability_inquiry(messages: list[dict]) -> bool:
     return any(p in text for p in _CAPABILITY_INQUIRY_ES + _CAPABILITY_INQUIRY_EN)
 
 
+_MULTI_FILE_KEYWORDS = [
+    # Spanish
+    "proyecto completo", "stack completo", "estructura completa", "todos los archivos",
+    "crea los archivos", "genera los archivos", "crea el proyecto", "genera el proyecto",
+    "aplicación completa", "app completa", "sistema completo", "backend completo",
+    "frontend completo", "múltiples archivos", "varios archivos",
+    "requirements.txt", "dockerfile", "docker-compose",
+    "main.py", "app.py", "index.js", "index.ts", "package.json",
+    # English
+    "complete project", "full project", "full stack", "all files",
+    "create the files", "generate the files", "create the project", "complete application",
+    "multiple files", "several files",
+]
+
+
+def _user_wants_multiple_files(messages: list[dict]) -> bool:
+    """Return True if the original user request implies creating multiple files."""
+    text = _last_user_message(messages)
+    if not text:
+        return False
+    return any(kw in text for kw in _MULTI_FILE_KEYWORDS)
+
+
+def _permission_type_for_tool(tool_name: str) -> str | None:
+    """Map tool name to permission category."""
+    if tool_name == "execute_command":
+        return "execute_command"
+    if tool_name in ("write_file", "edit_file"):
+        return "write_file"
+    if tool_name == "delete_file":
+        return "delete_file"
+    return None
+
+
 def _requires_confirmation(tool_name: str, tool_input: dict) -> bool:
-    """Check if a tool call requires user confirmation."""
+    """Check if a tool call requires user confirmation (ignoring saved project perms)."""
     cfg = get_config()
-    
+
     if tool_name == "execute_command":
         return cfg.tools.terminal.require_confirmation
     if tool_name in ("write_file", "edit_file"):
         return "write_file" in cfg.tools.filesystem.require_confirmation_for
     if tool_name == "delete_file":
         return "delete_file" in cfg.tools.filesystem.require_confirmation_for
-    
+
     return False
 
 
@@ -481,6 +600,7 @@ async def run_agent(
     adapter: BaseModelAdapter,
     extra_tools: list[BaseTool] | None = None,
     request_approval: Callable[[str], Awaitable[bool]] | None = None,
+    working_directory: str | None = None,
 ) -> AsyncIterator[StreamEvent]:
     """
     Run the agent loop. Yields StreamEvents for the frontend.
@@ -488,6 +608,15 @@ async def run_agent(
     cfg = get_config()
     tools = get_enabled_tools() + (extra_tools or [])
     tool_map = {t.name: t for t in tools}
+
+    # Set the per-conversation working directory so filesystem tools allow it
+    if working_directory:
+        from backend.tools.filesystem import _conv_working_dir
+        from pathlib import Path as _Path
+        _wd_resolved = _Path(working_directory).expanduser().resolve()
+        _wd_token = _conv_working_dir.set(_wd_resolved)
+    else:
+        _wd_token = None
 
     is_anthropic = "anthropic" in type(adapter).__name__.lower()
     schema_tools = _tools_to_anthropic(tools) if is_anthropic else _tools_to_openai(tools)
@@ -501,18 +630,32 @@ async def run_agent(
         if matched and matched.system_prompt:
             per_model_prompt = matched.system_prompt
     system = (per_model_prompt or cfg.agent.system_prompt) + _load_memory()
+    if working_directory:
+        system += f"\n\n**Directorio de proyecto activo:** `{working_directory}`\nTrabaja dentro de este directorio salvo que el usuario indique otra ruta."
+        project_instructions = _load_project_instructions(working_directory)
+        if project_instructions:
+            system += project_instructions
     working_messages = list(messages)
     max_iter = cfg.agent.max_iterations
-    hallucination_corrections = 0  # Limit corrections to 1 per turn to avoid loops
+    hallucination_corrections = 0  # Limit corrections to 2 per turn to avoid loops
     total_input_tokens = 0
     total_output_tokens = 0
 
+    # Track write operations across iterations to detect mid-task stops
+    write_calls_this_run: int = 0
+    write_calls_last_iter: int = 0
+
+    import logging as _logging
+    _loop_log = _logging.getLogger("backend.agent.loop")
+
     for iteration in range(max_iter):
         yield StreamEvent(type="iteration", data={"n": iteration + 1})
+        _loop_log.info(f"[loop] iter={iteration+1} msgs={len(working_messages)}")
 
         tool_calls: list[dict] = []
         assistant_text = ""
         stop_reason = None
+        write_calls_last_iter = 0
 
         async for event in adapter.stream_chat(working_messages, schema_tools, system):
             if event.type == "text_delta":
@@ -565,6 +708,8 @@ async def run_agent(
                 ]
             working_messages.append(assistant_msg)
 
+        _loop_log.info(f"[loop] iter={iteration+1} tool_calls={[t['name'] for t in tool_calls]} text_len={len(assistant_text)} stop={stop_reason}")
+
         if not tool_calls:
             # ── Inline tool call recovery ──────────────────────────────────
             # Some local models (e.g. Qwen via Ollama) write tool calls as
@@ -602,23 +747,21 @@ async def run_agent(
                 # Detect hallucinated actions only when the user actually requested a task
                 # (not a greeting, not a capability inquiry) and only once per turn.
                 if (
-                    hallucination_corrections < 1
+                    hallucination_corrections < 2
                     and assistant_text
-                    and _is_task_request(working_messages)
                     and not _is_capability_inquiry(working_messages)
                     and _detect_hallucinated_action(assistant_text)
                 ):
                     hallucination_corrections += 1
                     correction = (
-                        "[SYSTEM] CRITICAL ERROR: You just said you cannot access files or the filesystem, "
-                        "but you DO have filesystem tools available to you RIGHT NOW. "
-                        "You are NOT a regular chat assistant — you are LocalForge, an agent with real tools. "
-                        "You MUST call the appropriate tool immediately without any explanation or apology. "
-                        "Available tools: list_directory(), read_file(), write_file(), edit_file(), "
-                        "search_files(), execute_command(), web_search(). "
-                        "If the user asked to list files → call list_directory() NOW. "
-                        "If the user asked to read code → call read_file() NOW. "
-                        "Do NOT explain, do NOT apologize — just call the tool."
+                        "[SISTEMA] ALTO. Has descrito una acción o anunciado lo que ibas a hacer, "
+                        "pero NO has llamado a ninguna herramienta. Eso está prohibido. "
+                        "DEBES llamar a la herramienta apropiada AHORA MISMO — sin más texto, sin anuncios. "
+                        "Herramientas disponibles: list_directory(), read_file(), write_file(), edit_file(), "
+                        "search_files(), execute_command(), web_search(), generate_image(), generate_video(), "
+                        "create_video_from_images(). "
+                        "Mira la conversación y llama a la herramienta correcta inmediatamente. "
+                        "Responde siempre en español. No digas lo que vas a hacer — simplemente HAZLO llamando a la herramienta."
                     )
                     # Inject correction silently — no warning shown in the chat UI.
                     # Tell the frontend to discard the text streamed so far (the capability list)
@@ -626,11 +769,28 @@ async def run_agent(
                     yield StreamEvent(type="clear_content", data={})
                     working_messages.append({"role": "user", "content": correction})
                     continue
+                # ── Mid-task continuation ──────────────────────────────────
+                # If the model wrote files this iteration and then stopped
+                # without tool calls, it likely paused mid-task. Keep going
+                # automatically — max_iter is the only safety cap.
+                if write_calls_last_iter > 0:
+                    working_messages.append({
+                        "role": "user",
+                        "content": (
+                            "[SISTEMA] Has creado algunos archivos pero la tarea puede no estar completa. "
+                            "Si quedan archivos por crear, continúa llamando a write_file() ahora mismo. "
+                            "Si ya terminaste todos los archivos, responde con un resumen breve de lo creado."
+                        ),
+                    })
+                    continue
+
                 if total_input_tokens or total_output_tokens:
                     yield StreamEvent(type="usage", data={
                         "input_tokens": total_input_tokens,
                         "output_tokens": total_output_tokens,
                     })
+                if _wd_token is not None:
+                    _conv_working_dir.reset(_wd_token)
                 return
 
         # Execute each tool call
@@ -642,7 +802,16 @@ async def run_agent(
             tool = tool_map.get(tool_name)
             
             # Check if confirmation is needed
-            if tool and _requires_confirmation(tool_name, tool_input):
+            perm_type = _permission_type_for_tool(tool_name)
+            already_granted = False
+            if perm_type and working_directory:
+                try:
+                    from backend.db.permissions_store import has_permission
+                    already_granted = await has_permission(working_directory, perm_type)
+                except Exception:
+                    already_granted = False
+
+            if tool and _requires_confirmation(tool_name, tool_input) and not already_granted:
                 confirmation_msg = _format_confirmation_message(tool_name, tool_input)
                 yield StreamEvent(
                     type="tool_confirmation_needed",
@@ -651,6 +820,8 @@ async def run_agent(
                         "name": tool_name,
                         "input": tool_input,
                         "message": confirmation_msg,
+                        "permission_type": perm_type,
+                        "project_path": working_directory,
                     },
                 )
                 # Pause until user approves or rejects (or timeout)
@@ -666,6 +837,11 @@ async def run_agent(
                     else:
                         working_messages.append({"role": "tool", "tool_call_id": tool_id, "content": result})
                     continue
+
+            # Track write operations so we can detect mid-task stops
+            if tool_name in ("write_file", "edit_file", "create_directory"):
+                write_calls_this_run += 1
+                write_calls_last_iter += 1
 
             # Execute the tool
             if tool is None:
@@ -696,4 +872,6 @@ async def run_agent(
                     "content": result,
                 })
 
+    if _wd_token is not None:
+        _conv_working_dir.reset(_wd_token)
     yield StreamEvent(type="error", data={"message": f"Max iterations ({max_iter}) reached"})

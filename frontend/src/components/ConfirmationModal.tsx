@@ -1,16 +1,18 @@
 import { useState, useEffect } from "react";
-import { AlertTriangle, X, Check, Terminal, FileText, Trash2 } from "lucide-react";
+import { AlertTriangle, X, Check, Terminal, FileText, Trash2, FolderLock } from "lucide-react";
 
 export interface PendingConfirmation {
   tool_use_id: string;
   name: string;
   input: Record<string, unknown>;
   message: string;
+  permission_type?: string;
+  project_path?: string;
 }
 
 interface ConfirmationModalProps {
   confirmation: PendingConfirmation;
-  onApprove: () => void;
+  onApprove: (saveForProject: boolean) => void;
   onReject: () => void;
 }
 
@@ -20,21 +22,27 @@ export function ConfirmationModal({ confirmation, onApprove, onReject }: Confirm
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       if (e.key === "Escape") onReject();
-      if (e.key === "Enter" && !loading) { setLoading(true); onApprove(); }
+      if (e.key === "Enter" && !loading) { setLoading(true); onApprove(false); }
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
   }, [loading, onApprove, onReject]);
 
-  const handleApprove = () => {
+  const handleOnce = () => {
     setLoading(true);
-    onApprove();
+    onApprove(false);
+  };
+
+  const handleForProject = () => {
+    setLoading(true);
+    onApprove(true);
   };
 
   const getIcon = () => {
     switch (confirmation.name) {
       case "execute_command": return <Terminal className="w-5 h-5" />;
-      case "write_file":      return <FileText className="w-5 h-5" />;
+      case "write_file":
+      case "edit_file":       return <FileText className="w-5 h-5" />;
       case "delete_file":     return <Trash2 className="w-5 h-5" />;
       default:                return <AlertTriangle className="w-5 h-5" />;
     }
@@ -47,6 +55,12 @@ export function ConfirmationModal({ confirmation, onApprove, onReject }: Confirm
       default:                return "text-yellow-500 bg-yellow-50 dark:bg-yellow-950/30";
     }
   };
+
+  const projectName = confirmation.project_path
+    ? confirmation.project_path.split(/[\\/]/).filter(Boolean).pop()
+    : null;
+
+  const canSaveForProject = !!(confirmation.permission_type && confirmation.project_path);
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center">
@@ -72,23 +86,36 @@ export function ConfirmationModal({ confirmation, onApprove, onReject }: Confirm
         </div>
 
         {/* Actions */}
-        <div className="flex gap-3 px-4 py-3 border-t border-gray-200 dark:border-zinc-700 bg-gray-50 dark:bg-zinc-800/50">
-          <button
-            onClick={onReject}
-            disabled={loading}
-            className="flex-1 flex items-center justify-center gap-2 px-4 py-2 rounded-sm border border-gray-300 dark:border-zinc-600 text-gray-700 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-zinc-700 transition-colors"
-          >
-            <X className="w-4 h-4" />
-            Cancelar <span className="text-xs opacity-50 ml-1">Esc</span>
-          </button>
-          <button
-            onClick={handleApprove}
-            disabled={loading}
-            className="flex-1 flex items-center justify-center gap-2 px-4 py-2 rounded-sm bg-red-600 hover:bg-red-500 text-white transition-colors disabled:opacity-60"
-          >
-            <Check className="w-4 h-4" />
-            {loading ? "Ejecutando…" : <>Ejecutar <span className="text-xs opacity-70 ml-1">Enter</span></>}
-          </button>
+        <div className="flex flex-col gap-2 px-4 py-3 border-t border-gray-200 dark:border-zinc-700 bg-gray-50 dark:bg-zinc-800/50">
+          <div className="flex gap-2">
+            <button
+              onClick={onReject}
+              disabled={loading}
+              className="flex-1 flex items-center justify-center gap-2 px-3 py-2 rounded-sm border border-gray-300 dark:border-zinc-600 text-gray-700 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-zinc-700 transition-colors text-sm"
+            >
+              <X className="w-4 h-4" />
+              Cancelar <span className="text-xs opacity-50 ml-1">Esc</span>
+            </button>
+            <button
+              onClick={handleOnce}
+              disabled={loading}
+              className="flex-1 flex items-center justify-center gap-2 px-3 py-2 rounded-sm bg-red-600 hover:bg-red-500 text-white transition-colors disabled:opacity-60 text-sm"
+            >
+              <Check className="w-4 h-4" />
+              {loading ? "Ejecutando…" : <>Solo esta vez <span className="text-xs opacity-70 ml-1">Enter</span></>}
+            </button>
+          </div>
+
+          {canSaveForProject && (
+            <button
+              onClick={handleForProject}
+              disabled={loading}
+              className="w-full flex items-center justify-center gap-2 px-3 py-2 rounded-sm bg-emerald-600 hover:bg-emerald-500 text-white transition-colors disabled:opacity-60 text-sm"
+            >
+              <FolderLock className="w-4 h-4" />
+              Permitir siempre en <strong className="mx-1">{projectName ?? "este proyecto"}</strong>
+            </button>
+          )}
         </div>
       </div>
     </div>

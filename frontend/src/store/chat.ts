@@ -8,6 +8,7 @@ import {
   listConversations,
   listModels,
   renameConversation,
+  setWorkingDirectory,
   streamChat,
   approveTool,
 } from "../api/client";
@@ -42,6 +43,7 @@ interface ChatState {
   modelsLoading: boolean;
   error: string | null;
   pendingConfirmation: PendingConfirmation | null;
+  workingDirectory: string | null;
 
   loadConversations: () => Promise<void>;
   loadModels: () => Promise<void>;
@@ -49,6 +51,7 @@ interface ChatState {
   newConversation: () => Promise<void>;
   deleteConv: (id: string) => Promise<void>;
   renameConv: (id: string, title: string) => Promise<void>;
+  setWorkingDir: (path: string | null) => Promise<void>;
   sendMessage: (content: string, images?: ImagePayload[], displayContent?: string, textFileNames?: string[]) => void;
   setModel: (model: string) => void;
   stopStream: (() => void) | null;
@@ -69,6 +72,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
   error: null,
   stopStream: null,
   pendingConfirmation: null,
+  workingDirectory: null,
 
   loadConversations: async () => {
     const conversations = await listConversations();
@@ -98,14 +102,29 @@ export const useChatStore = create<ChatState>((set, get) => ({
 
   selectConversation: async (id: string) => {
     const conv = await getConversation(id);
+    set({ workingDirectory: conv.working_directory ?? null });
     const messages: UIMessage[] = (conv.messages ?? [])
       .filter(m => m.role === "user" || m.role === "assistant")
-      .map(m => ({
-        id: m.id,
-        role: m.role as "user" | "assistant",
-        content: typeof m.content === "string" ? m.content : JSON.stringify(m.content),
-        toolCalls: m.metadata?.tool_calls,
-      }));
+      .map(m => {
+        const raw = typeof m.content === "string" ? m.content : JSON.stringify(m.content);
+        // Strip embedded file blocks injected by handleSend() and turn them
+        // back into attachment chips so the bubble doesn't dump huge CSVs/JSON.
+        // Pattern produced by ChatWindow: ```ext\n// Archivo: NAME\n<content>\n```
+        const fileBlockRe = /```[a-zA-Z0-9]*\n\/\/\s*Archivo:\s*([^\n]+)\n[\s\S]*?\n```/g;
+        const extracted: Array<{ name: string; isText: true }> = [];
+        const cleaned = raw.replace(fileBlockRe, (_match, name: string) => {
+          extracted.push({ name: name.trim(), isText: true });
+          return "";
+        }).replace(/^\s*Aquí están los archivos:\s*/i, "")
+          .trim();
+        return {
+          id: m.id,
+          role: m.role as "user" | "assistant",
+          content: cleaned,
+          toolCalls: m.metadata?.tool_calls,
+          attachments: extracted.length > 0 ? extracted : undefined,
+        };
+      });
     set({ activeConvId: id, messages });
   },
 
@@ -135,6 +154,18 @@ export const useChatStore = create<ChatState>((set, get) => ({
     await renameConversation(id, trimmed);
     set(s => ({
       conversations: s.conversations.map(c => c.id === id ? { ...c, title: trimmed } : c),
+    }));
+  },
+
+  setWorkingDir: async (path: string | null) => {
+    const { activeConvId } = get();
+    if (!activeConvId) return;
+    await setWorkingDirectory(activeConvId, path);
+    set({ workingDirectory: path });
+    set(s => ({
+      conversations: s.conversations.map(c =>
+        c.id === activeConvId ? { ...c, working_directory: path } : c
+      ),
     }));
   },
 
@@ -300,7 +331,20 @@ export const useChatStore = create<ChatState>((set, get) => ({
           return;
         }
 
-        set({ isLoading: false, error: msg, stopStream: null });
+        // Show error as a red message in the chat (not just in top toast)
+        set(s => ({
+          messages: [
+            ...s.messages.filter(m => m.id !== assistantMsg.id), // Remove empty assistant bubble
+            {
+              id: `error-${Date.now()}`,
+              role: "assistant",
+              content: `⚠️ **Error:** ${msg}`,
+            },
+          ],
+          isLoading: false,
+          error: msg,
+          stopStream: null,
+        }));
       }
     );
 

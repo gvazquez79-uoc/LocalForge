@@ -32,6 +32,12 @@ async def init_db() -> None:
                 FOREIGN KEY (conversation_id) REFERENCES conversations(id) ON DELETE CASCADE
             )
         """)
+        # Migration: add working_directory column if it doesn't exist yet
+        try:
+            await db.execute("ALTER TABLE conversations ADD COLUMN working_directory TEXT")
+            await db.commit()
+        except Exception:
+            pass  # Column already exists
 
 
 async def create_conversation(model: str, title: str = "New conversation") -> dict:
@@ -43,7 +49,16 @@ async def create_conversation(model: str, title: str = "New conversation") -> di
             (conv_id, title, model, now, now),
         )
         await db.commit()
-    return {"id": conv_id, "title": title, "model": model, "created_at": now, "updated_at": now}
+    return {"id": conv_id, "title": title, "model": model, "created_at": now, "updated_at": now, "working_directory": None}
+
+
+async def update_working_directory(conv_id: str, working_directory: str | None) -> None:
+    async with get_db() as db:
+        await db.execute(
+            "UPDATE conversations SET working_directory = ? WHERE id = ?",
+            (working_directory, conv_id),
+        )
+        await db.commit()
 
 
 async def list_conversations(limit: int = 50) -> list[dict]:

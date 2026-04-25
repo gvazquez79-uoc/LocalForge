@@ -1,8 +1,10 @@
 import { useEffect, useRef, useState, useCallback } from "react";
-import { Send, StopCircle, AlertCircle, X, Upload, File, XCircle, FileText, Paperclip } from "lucide-react";
+import { Send, StopCircle, AlertCircle, X, Upload, File, XCircle, FileText, Paperclip, FolderOpen, FolderX, BookOpen, Wand2, Save } from "lucide-react";
 import { useChatStore } from "../store/chat";
 import type { ImagePayload } from "../store/chat";
-import { getConfig } from "../api/client";
+import { getConfig, getProjectInstructions, saveProjectInstructions, getApiKey } from "../api/client";
+
+const API_BASE = (import.meta.env.VITE_API_BASE as string | undefined) ?? "http://localhost:8000/api";
 import { Message } from "./Message";
 import { ConfirmationModal } from "./ConfirmationModal";
 
@@ -28,6 +30,15 @@ const DEFAULT_MAX_TEXT_BYTES  = 512 * 1024;
 
 const SUPPORTED_IMAGE_TYPES = ["image/jpeg", "image/png", "image/gif", "image/webp"];
 
+const TEXT_EXTENSIONS = [
+  "txt", "md", "csv", "tsv", "log", "ini", "cfg", "conf", "env",
+  "json", "jsonl", "yaml", "yml", "toml", "xml", "html", "htm", "css", "scss",
+  "js", "jsx", "ts", "tsx", "mjs", "cjs",
+  "py", "rb", "go", "rs", "java", "kt", "c", "h", "cpp", "hpp", "cs",
+  "php", "sh", "bash", "zsh", "ps1", "bat", "cmd",
+  "sql", "graphql", "proto", "dockerfile", "makefile", "gitignore",
+];
+
 function isTextFile(file: File): boolean {
   if (file.type.startsWith("text/")) return true;
   if (!file.type) return true; // .py, .ts, .go … often have no MIME
@@ -35,8 +46,13 @@ function isTextFile(file: File): boolean {
     "application/json", "application/javascript", "application/typescript",
     "application/xml",  "application/yaml",       "application/toml",
     "application/x-sh", "application/x-python",   "application/x-yaml",
+    // Windows often reports CSV as Excel
+    "application/vnd.ms-excel", "application/csv", "application/x-csv",
   ];
-  return textAppTypes.includes(file.type);
+  if (textAppTypes.includes(file.type)) return true;
+  // Fallback: detect by extension (Windows MIME types are unreliable)
+  const ext = file.name.toLowerCase().split(".").pop() ?? "";
+  return TEXT_EXTENSIONS.includes(ext);
 }
 
 function isImageFile(file: File): boolean {
@@ -58,6 +74,16 @@ export function ChatWindow() {
   const pendingConfirmation = useChatStore(s => s.pendingConfirmation);
   const approveConfirmation = useChatStore(s => s.approveConfirmation);
   const rejectConfirmation  = useChatStore(s => s.rejectConfirmation);
+  const workingDirectory    = useChatStore(s => s.workingDirectory);
+  const setWorkingDir       = useChatStore(s => s.setWorkingDir);
+
+  const [showDirInput, setShowDirInput]     = useState(false);
+  const [dirInputValue, setDirInputValue]   = useState("");
+  const [showInstructions, setShowInstructions] = useState(false);
+  const [instructionsContent, setInstructionsContent] = useState("");
+  const [instructionsFilename, setInstructionsFilename] = useState("LOCALFORGE.md");
+  const [instructionsExists, setInstructionsExists] = useState(false);
+  const [instructionsSaving, setInstructionsSaving] = useState(false);
 
   const [input, setInput]                           = useState("");
   const [attachments, setAttachments]               = useState<FileAttachment[]>([]);
@@ -337,23 +363,109 @@ export function ChatWindow() {
 
       {/* Input bar */}
       <div className="border-t border-gray-200 dark:border-zinc-800 px-4 py-4 bg-white dark:bg-zinc-950">
+
+        {/* Project directory popover */}
+        {showDirInput && (
+          <div className="max-w-4xl mx-auto mb-2">
+            <form
+              className="flex items-center gap-2 bg-gray-50 dark:bg-zinc-900 border border-emerald-400 rounded-xl px-3 py-2"
+              onSubmit={(e) => {
+                e.preventDefault();
+                const val = dirInputValue.trim();
+                setWorkingDir(val || null);
+                setShowDirInput(false);
+              }}
+            >
+              <FolderOpen size={14} className="text-emerald-500 flex-shrink-0" />
+              <input
+                autoFocus
+                type="text"
+                value={dirInputValue}
+                onChange={(e) => setDirInputValue(e.target.value)}
+                placeholder="Ruta del proyecto, ej: G:\proyectos\MiApp"
+                className="flex-1 bg-transparent text-sm text-gray-800 dark:text-zinc-100 placeholder-gray-400 dark:placeholder-zinc-500 focus:outline-none"
+              />
+              <button type="submit" className="px-3 py-1 rounded-lg bg-emerald-500 hover:bg-emerald-600 text-white text-xs font-medium">
+                Aceptar
+              </button>
+              <button type="button" onClick={() => setShowDirInput(false)} className="text-gray-400 hover:text-gray-600 dark:hover:text-zinc-300">
+                <X size={14} />
+              </button>
+            </form>
+          </div>
+        )}
+
+        {/* Active project badge */}
+        {workingDirectory && !showDirInput && (
+          <div className="max-w-4xl mx-auto mb-2 flex items-center gap-2 px-3 py-1.5 bg-emerald-50 dark:bg-emerald-950/30 border border-emerald-200 dark:border-emerald-800 rounded-lg text-xs">
+            <FolderOpen size={12} className="text-emerald-500 flex-shrink-0" />
+            <span className="flex-1 font-mono text-emerald-700 dark:text-emerald-400 truncate" title={workingDirectory}>{workingDirectory}</span>
+            <button onClick={() => { setDirInputValue(workingDirectory); setShowDirInput(true); }} className="text-emerald-500 hover:text-emerald-700 transition-colors" title="Cambiar">
+              <FolderOpen size={12} />
+            </button>
+            <button onClick={() => setWorkingDir(null)} className="text-emerald-400 hover:text-red-500 transition-colors" title="Quitar">
+              <FolderX size={12} />
+            </button>
+          </div>
+        )}
+
         <div className="flex gap-2 items-end max-w-4xl mx-auto">
 
-          {/* File picker button */}
-          <label
-            className="flex-shrink-0 p-3 bg-gray-100 hover:bg-gray-200 dark:bg-zinc-800 dark:hover:bg-zinc-700 rounded-xl cursor-pointer transition-colors"
-            title="Adjuntar archivo (imágenes, PDFs, texto)"
-          >
-            <Paperclip size={18} className="text-gray-500 dark:text-zinc-400" />
-            <input
-              ref={fileInputRef}
-              type="file"
-              className="hidden"
-              multiple
-              accept="image/jpeg,image/png,image/gif,image/webp,application/pdf,text/*,.json,.yaml,.yml,.toml,.py,.ts,.js,.tsx,.jsx,.go,.rs,.java,.cpp,.c,.h,.sh,.md"
-              onChange={handleFileInput}
-            />
-          </label>
+          {/* Folder / file picker buttons */}
+          <div className="flex flex-col gap-1 flex-shrink-0">
+            {/* Project folder button */}
+            <button
+              onClick={() => { setDirInputValue(workingDirectory ?? ""); setShowDirInput(s => !s); }}
+              title={workingDirectory ? `Proyecto: ${workingDirectory}` : "Establecer directorio de proyecto"}
+              className={`p-2.5 rounded-xl transition-colors ${
+                workingDirectory
+                  ? "bg-emerald-100 hover:bg-emerald-200 dark:bg-emerald-900/40 dark:hover:bg-emerald-800/60 text-emerald-600 dark:text-emerald-400"
+                  : "bg-gray-100 hover:bg-gray-200 dark:bg-zinc-800 dark:hover:bg-zinc-700 text-gray-500 dark:text-zinc-400"
+              }`}
+            >
+              <FolderOpen size={16} />
+            </button>
+            {/* Attach file button */}
+            <label
+              className="p-2.5 bg-gray-100 hover:bg-gray-200 dark:bg-zinc-800 dark:hover:bg-zinc-700 rounded-xl cursor-pointer transition-colors"
+              title="Adjuntar archivo"
+            >
+              <Paperclip size={16} className="text-gray-500 dark:text-zinc-400" />
+              <input
+                ref={fileInputRef}
+                type="file"
+                className="hidden"
+                multiple
+                accept="image/jpeg,image/png,image/gif,image/webp,application/pdf,text/*,.json,.yaml,.yml,.toml,.py,.ts,.js,.tsx,.jsx,.go,.rs,.java,.cpp,.c,.h,.sh,.md"
+                onChange={handleFileInput}
+              />
+            </label>
+
+            {/* LOCALFORGE.md button — only shown when project dir is set */}
+            {workingDirectory && (
+              <button
+                onClick={async () => {
+                  if (!showInstructions) {
+                    try {
+                      const data = await getProjectInstructions(workingDirectory);
+                      setInstructionsContent(data.content);
+                      setInstructionsFilename(data.filename);
+                      setInstructionsExists(data.exists);
+                    } catch { /* keep current state */ }
+                  }
+                  setShowInstructions(v => !v);
+                }}
+                title={instructionsExists ? "Editar LOCALFORGE.md" : "Crear LOCALFORGE.md"}
+                className={`p-2.5 rounded-xl transition-colors ${
+                  instructionsExists
+                    ? "bg-violet-100 hover:bg-violet-200 dark:bg-violet-900/30 dark:hover:bg-violet-800/50 text-violet-600 dark:text-violet-400"
+                    : "bg-gray-100 hover:bg-gray-200 dark:bg-zinc-800 dark:hover:bg-zinc-700 text-gray-400 dark:text-zinc-500"
+                }`}
+              >
+                <BookOpen size={16} />
+              </button>
+            )}
+          </div>
 
           <textarea
             ref={textareaRef}
@@ -390,9 +502,94 @@ export function ChatWindow() {
       {pendingConfirmation && (
         <ConfirmationModal
           confirmation={pendingConfirmation}
-          onApprove={approveConfirmation}
+          onApprove={async (saveForProject) => {
+            if (saveForProject && pendingConfirmation.permission_type && pendingConfirmation.project_path) {
+              try {
+                const apiKey = getApiKey();
+                await fetch(`${API_BASE}/permissions/grant`, {
+                  method: "POST",
+                  headers: {
+                    "Content-Type": "application/json",
+                    ...(apiKey ? { "X-API-Key": apiKey } : {}),
+                  },
+                  body: JSON.stringify({
+                    project_path: pendingConfirmation.project_path,
+                    permission_type: pendingConfirmation.permission_type,
+                  }),
+                });
+              } catch (_) { /* silently ignore */ }
+            }
+            approveConfirmation();
+          }}
           onReject={rejectConfirmation}
         />
+      )}
+
+      {/* LOCALFORGE.md editor modal */}
+      {showInstructions && workingDirectory && (
+        <div className="absolute inset-0 z-50 bg-black/50 flex items-center justify-center p-4">
+          <div className="bg-white dark:bg-zinc-900 rounded-2xl shadow-2xl w-full max-w-2xl flex flex-col max-h-[80vh]">
+            {/* Header */}
+            <div className="flex items-center gap-3 px-5 py-4 border-b border-gray-200 dark:border-zinc-700">
+              <BookOpen size={16} className="text-emerald-500" />
+              <div className="flex-1">
+                <h3 className="font-semibold text-gray-900 dark:text-zinc-100 text-sm">
+                  {instructionsFilename}
+                </h3>
+                <p className="text-xs text-gray-400 dark:text-zinc-500 truncate">{workingDirectory}</p>
+              </div>
+              <button
+                onClick={() => {
+                  const msg = `Explora el proyecto en ${workingDirectory} (estructura de archivos, dependencias, tecnologías) y genera un archivo LOCALFORGE.md completo con: descripción del proyecto, stack tecnológico, estructura de directorios, cómo ejecutar, convenciones de código y cualquier información relevante para trabajar en él.`;
+                  setShowInstructions(false);
+                  useChatStore.getState().sendMessage(msg);
+                }}
+                className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-violet-100 hover:bg-violet-200 dark:bg-violet-900/30 dark:hover:bg-violet-800/50 text-violet-600 dark:text-violet-400 text-xs font-medium transition-colors"
+                title="El agente explorará el proyecto y generará el archivo automáticamente"
+              >
+                <Wand2 size={12} />
+                Generar automáticamente
+              </button>
+              <button onClick={() => setShowInstructions(false)} className="text-gray-400 hover:text-gray-600 dark:hover:text-zinc-300 ml-1">
+                <X size={16} />
+              </button>
+            </div>
+
+            {/* Textarea */}
+            <textarea
+              value={instructionsContent}
+              onChange={(e) => setInstructionsContent(e.target.value)}
+              placeholder={`# Mi Proyecto\n\n## Stack\n- ...\n\n## Estructura\n- src/ — código fuente\n- ...\n\n## Cómo ejecutar\n...\n\n## Convenciones\n...`}
+              className="flex-1 resize-none px-5 py-4 text-sm font-mono text-gray-800 dark:text-zinc-100 bg-transparent placeholder-gray-300 dark:placeholder-zinc-600 focus:outline-none min-h-[300px]"
+            />
+
+            {/* Footer */}
+            <div className="flex items-center justify-between px-5 py-3 border-t border-gray-200 dark:border-zinc-700">
+              <p className="text-xs text-gray-400 dark:text-zinc-500">
+                Se inyecta en el system prompt de cada mensaje de esta conversación.
+              </p>
+              <button
+                disabled={instructionsSaving}
+                onClick={async () => {
+                  setInstructionsSaving(true);
+                  try {
+                    await saveProjectInstructions(workingDirectory, instructionsContent, instructionsFilename);
+                    setInstructionsExists(true);
+                    setShowInstructions(false);
+                  } catch (e) {
+                    alert(`Error al guardar: ${e}`);
+                  } finally {
+                    setInstructionsSaving(false);
+                  }
+                }}
+                className="flex items-center gap-1.5 px-4 py-2 rounded-lg bg-emerald-500 hover:bg-emerald-600 disabled:opacity-50 text-white text-sm font-medium transition-colors"
+              >
+                <Save size={13} />
+                {instructionsSaving ? "Guardando…" : "Guardar"}
+              </button>
+            </div>
+          </div>
+        </div>
       )}
     </div>
   );
