@@ -23,6 +23,7 @@ class ModelConfig(BaseModel):
     base_url: Optional[str] = None
     id: Optional[str] = None            # DB row id (None for JSON-sourced models)
     system_prompt: Optional[str] = None # per-model system prompt override
+    temperature: Optional[float] = None  # None = use adapter default (0.3)
 
 
 class FilesystemToolConfig(BaseModel):

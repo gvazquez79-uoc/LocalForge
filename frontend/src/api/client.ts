@@ -465,6 +465,31 @@ export async function deleteProvider(id: string): Promise<void> {
   if (!res.ok) throw new Error(await res.text());
 }
 
+// ── Auto-update ───────────────────────────────────────────────────────────────
+
+export interface UpdateCheckResult {
+  update_available: boolean;
+  local_commit?: string;
+  remote_commit?: string;
+  commits?: string[];
+  error?: string;
+}
+
+export async function checkUpdate(): Promise<UpdateCheckResult> {
+  const res = await fetch(`${BASE}/update/check`, { headers: authHeaders() });
+  if (!res.ok) throw new Error(await res.text());
+  return res.json();
+}
+
+export async function applyUpdate(): Promise<{ ok: boolean; output?: string; error?: string }> {
+  const res = await fetch(`${BASE}/update/apply`, {
+    method: "POST",
+    headers: authHeaders(),
+  });
+  if (!res.ok) throw new Error(await res.text());
+  return res.json();
+}
+
 // ── System stats ──────────────────────────────────────────────────────────────
 
 export interface GpuStats {

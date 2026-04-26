@@ -29,16 +29,18 @@ class ModelCreate(BaseModel):
     base_url: Optional[str] = None
     is_default: bool = False
     system_prompt: Optional[str] = None
+    temperature: Optional[float] = None
 
 
 class ModelUpdate(BaseModel):
     name: Optional[str] = None
     display_name: Optional[str] = None
     provider: Optional[str] = None
-    api_key: Optional[str] = None      # None = keep; "" = clear
+    api_key: Optional[str] = None       # None = keep; "" = clear
     base_url: Optional[str] = None
     is_default: Optional[bool] = None
-    system_prompt: Optional[str] = None  # None = keep; "" = clear
+    system_prompt: Optional[str] = None # None = keep; "" = clear
+    temperature: Optional[float] = None # None = keep; use sentinel in store
 
 
 @router.get("/models")
@@ -57,6 +59,7 @@ async def api_create_model(body: ModelCreate):
             base_url=body.base_url,
             is_default=body.is_default,
             system_prompt=body.system_prompt,
+            temperature=body.temperature,
         )
     except ValueError as exc:
         raise HTTPException(status_code=409, detail=str(exc))
@@ -75,6 +78,7 @@ async def api_update_model(model_id: str, body: ModelUpdate):
         base_url=body.base_url,
         is_default=body.is_default,
         system_prompt=body.system_prompt,
+        temperature=body.temperature if body.temperature is not None else -1.0,
     )
     if model is None:
         raise HTTPException(status_code=404, detail="Model not found")

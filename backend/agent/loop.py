@@ -621,14 +621,16 @@ async def run_agent(
     is_anthropic = "anthropic" in type(adapter).__name__.lower()
     schema_tools = _tools_to_anthropic(tools) if is_anthropic else _tools_to_openai(tools)
 
-    # Use per-model system prompt if defined, otherwise fall back to the global one
-    # OllamaNativeAdapter uses self.model_name; AnthropicAdapter/OpenAICompatAdapter use self.model
+    # Use per-model system prompt / temperature if defined
     model_name = getattr(adapter, "model", None) or getattr(adapter, "model_name", None)
     per_model_prompt: str | None = None
     if model_name:
         matched = next((m for m in cfg.models if m.name == model_name), None)
-        if matched and matched.system_prompt:
-            per_model_prompt = matched.system_prompt
+        if matched:
+            if matched.system_prompt:
+                per_model_prompt = matched.system_prompt
+            if matched.temperature is not None:
+                adapter.temperature = matched.temperature
     system = (per_model_prompt or cfg.agent.system_prompt) + _load_memory()
     if working_directory:
         system += f"\n\n**Directorio de proyecto activo:** `{working_directory}`\nTrabaja dentro de este directorio salvo que el usuario indique otra ruta."
@@ -843,6 +845,34 @@ async def run_agent(
                 write_calls_this_run += 1
                 write_calls_last_iter += 1
 
+            # Auto-read before edit — if model wants to edit a file it hasn't
+            # read yet this session, read it first and inject the content as a
+            # user context message so old_string always matches exactly.
+            if tool_name == "edit_file":
+                file_path_to_read = tool_input.get("path", "")
+                already_read = any(
+                    m.get("role") == "tool"
+                    and isinstance(m.get("content"), str)
+                    and file_path_to_read in m.get("content", "")
+                    for m in working_messages
+                )
+                if not already_read and file_path_to_read:
+                    read_tool = tool_map.get("read_file")
+                    if read_tool:
+                        try:
+                            read_result = await read_tool.run(path=file_path_to_read)
+                            # Prepend file content as a user message so the model
+                            # has the exact current content before the edit runs.
+                            working_messages.insert(-1, {
+                                "role": "user",
+                                "content": (
+                                    f"[SISTEMA] Contenido actual de `{file_path_to_read}` "
+                                    f"(leído automáticamente antes de editar):\n\n{read_result}"
+                                ),
+                            })
+                        except Exception:
+                            pass  # If auto-read fails, proceed anyway
+
             # Execute the tool
             if tool is None:
                 result = f"Error: unknown tool '{tool_name}'"
@@ -859,6 +889,19 @@ async def run_agent(
                 data={"tool_use_id": tool_id, "name": tool_name, "result": result},
             )
 
+            # Auto-retry on command error — if execute_command fails (exit code ≠ 0),
+            # inject a correction so the model fixes the problem automatically.
+            if tool_name == "execute_command" and isinstance(result, str) and (
+                "exit code" in result and "exit code 0" not in result
+                or result.startswith("Error:")
+                or "error:" in result.lower()[:200]
+            ):
+                _loop_log.info(f"[loop] Command failed, injecting auto-retry correction")
+                # We'll append this after the tool result message below
+                _command_failed = True
+            else:
+                _command_failed = False
+
             if is_anthropic:
                 working_messages.append({
                     "role": "tool",
@@ -870,6 +913,17 @@ async def run_agent(
                     "role": "tool",
                     "tool_call_id": tool_id,
                     "content": result,
+                })
+
+            # Inject auto-retry correction after saving failed command result
+            if _command_failed:
+                working_messages.append({
+                    "role": "user",
+                    "content": (
+                        "[SISTEMA] El comando ha fallado. Analiza el error anterior y corrígelo "
+                        "inmediatamente — ajusta el comando, instala dependencias faltantes o "
+                        "arregla el código según corresponda. No preguntes, actúa directamente."
+                    ),
                 })
 
     if _wd_token is not None:

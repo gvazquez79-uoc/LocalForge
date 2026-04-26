@@ -97,6 +97,7 @@ class OpenAICompatAdapter(BaseModelAdapter):
         self.model_name = model_name
         self._base_url  = base_url
         self._api_key   = api_key
+        self.temperature: float = 0.3
 
     async def stream_chat(
         self,
@@ -126,10 +127,11 @@ class OpenAICompatAdapter(BaseModelAdapter):
                 openai_messages.append({"role": msg["role"], "content": converted})
 
         kwargs: dict = {
-            "model":    self.model_name,
-            "messages": openai_messages,
-            "stream":   True,
+            "model":       self.model_name,
+            "messages":    openai_messages,
+            "stream":      True,
             "stream_options": {"include_usage": True},
+            "temperature": self.temperature,
         }
         if tools:
             kwargs["tools"] = tools

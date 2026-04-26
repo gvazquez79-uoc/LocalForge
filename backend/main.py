@@ -30,6 +30,7 @@ from backend.routers.providers import router as providers_router
 from backend.routers.stats import router as stats_router
 from backend.routers.logs import router as logs_router
 from backend.routers.permissions import router as permissions_router
+from backend.routers.update import router as update_router
 
 
 @asynccontextmanager
@@ -124,6 +125,7 @@ app.include_router(providers_router, prefix="/api")
 app.include_router(stats_router,     prefix="/api")
 app.include_router(logs_router,      prefix="/api")
 app.include_router(permissions_router, prefix="/api")
+app.include_router(update_router,     prefix="/api")
 
 
 @app.post("/api/dev/restart")

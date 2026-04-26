@@ -13,6 +13,7 @@ class AnthropicAdapter(BaseModelAdapter):
     def __init__(self, model_name: str, api_key: str):
         self.model_name = model_name
         self._api_key = api_key
+        self.temperature: float = 0.3
 
     async def stream_chat(
         self,
@@ -49,6 +50,7 @@ class AnthropicAdapter(BaseModelAdapter):
         kwargs: dict[str, Any] = {
             "model": self.model_name,
             "max_tokens": 8096,
+            "temperature": self.temperature,
             "system": system,
             "messages": anthropic_messages,
         }

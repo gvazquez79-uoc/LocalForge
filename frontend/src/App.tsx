@@ -3,6 +3,7 @@ import { Sidebar } from "./components/Sidebar";
 import { ChatWindow } from "./components/ChatWindow";
 import { SettingsPanel } from "./components/SettingsPanel";
 import { LoginScreen } from "./components/LoginScreen";
+import { UpdateBanner } from "./components/UpdateBanner";
 import { checkAuth } from "./api/client";
 
 type AuthState = "checking" | "ok" | "required" | "offline";
@@ -93,6 +94,7 @@ export default function App() {
         <ChatWindow />
       </main>
       <SettingsPanel open={settingsOpen} onClose={() => setSettingsOpen(false)} />
+      <UpdateBanner />
     </div>
   );
 }

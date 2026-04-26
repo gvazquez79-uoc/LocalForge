@@ -77,7 +77,7 @@ export function SettingsPanel({ open, onClose }: SettingsPanelProps) {
   const [dbModels, setDbModels] = useState<DbModel[]>([]);
   const [modelFormOpen, setModelFormOpen] = useState(false);
   const [editingModelId, setEditingModelId] = useState<string | null>(null);
-  const [modelForm, setModelForm] = useState({ name: "", display_name: "", provider: "ollama", base_url: "", system_prompt: "" });
+  const [modelForm, setModelForm] = useState({ name: "", display_name: "", provider: "ollama", base_url: "", system_prompt: "", temperature: null as number | null });
   const [overrideUrl, setOverrideUrl] = useState(false);  // show base_url input even when provider has URL
   const [modelSaving, setModelSaving] = useState(false);
   const [modelError, setModelError] = useState<string | null>(null);
@@ -152,7 +152,7 @@ export function SettingsPanel({ open, onClose }: SettingsPanelProps) {
   const openModelCreate = () => {
     setEditingModelId(null);
     const defaultProvider = providers[0]?.name ?? "ollama";
-    setModelForm({ name: "", display_name: "", provider: defaultProvider, base_url: "", system_prompt: "" });
+    setModelForm({ name: "", display_name: "", provider: defaultProvider, base_url: "", system_prompt: "", temperature: null });
     setOverrideUrl(false);
     setModelError(null);
     setModelFormOpen(true);
@@ -164,7 +164,7 @@ export function SettingsPanel({ open, onClose }: SettingsPanelProps) {
     const providerDefaultUrl = providerUrlMap[m.provider] ?? "";
     // Only show override if model has a URL that differs from its provider's URL
     const hasCustomUrl = !!modelBaseUrl && modelBaseUrl !== providerDefaultUrl;
-    setModelForm({ name: m.name, display_name: m.display_name, provider: m.provider, base_url: hasCustomUrl ? modelBaseUrl : "", system_prompt: m.system_prompt ?? "" });
+    setModelForm({ name: m.name, display_name: m.display_name, provider: m.provider, base_url: hasCustomUrl ? modelBaseUrl : "", system_prompt: m.system_prompt ?? "", temperature: m.temperature ?? null });
     setOverrideUrl(hasCustomUrl);
     setModelError(null);
     setModelFormOpen(true);
@@ -305,7 +305,8 @@ export function SettingsPanel({ open, onClose }: SettingsPanelProps) {
           display_name: modelForm.display_name,
           provider: modelForm.provider,
           base_url: effectiveBaseUrl,
-          system_prompt: effectivePrompt ?? "",  // "" = clear if empty
+          system_prompt: effectivePrompt ?? "",
+          temperature: modelForm.temperature,
         });
         setDbModels(ms => ms.map(m => m.id === editingModelId ? updated : m));
       } else {
@@ -316,6 +317,7 @@ export function SettingsPanel({ open, onClose }: SettingsPanelProps) {
           base_url: effectiveBaseUrl ?? undefined,
           is_default: dbModels.length === 0,
           system_prompt: effectivePrompt,
+          temperature: modelForm.temperature,
         });
         setDbModels(ms => [...ms, created]);
       }
@@ -648,6 +650,35 @@ export function SettingsPanel({ open, onClose }: SettingsPanelProps) {
                         </div>
                       );
                     })()}
+                    {/* Temperature slider */}
+                    <div className="flex flex-col gap-1">
+                      <label className="text-[11px] font-medium text-gray-500 dark:text-zinc-400 flex items-center justify-between">
+                        <span>Temperatura <span className="font-normal text-gray-400 dark:text-zinc-500">(creatividad)</span></span>
+                        <span className="font-mono text-emerald-600 dark:text-emerald-400">
+                          {modelForm.temperature === null ? "0.3 (por defecto)" : modelForm.temperature.toFixed(2)}
+                        </span>
+                      </label>
+                      <input
+                        type="range"
+                        min={0} max={1} step={0.05}
+                        value={modelForm.temperature ?? 0.3}
+                        onChange={(e) => setModelForm(f => ({ ...f, temperature: parseFloat(e.target.value) }))}
+                        className="w-full accent-emerald-500"
+                      />
+                      <div className="flex justify-between text-[10px] text-gray-400 dark:text-zinc-600">
+                        <span>0 — preciso</span>
+                        <span>0.5 — equilibrado</span>
+                        <span>1 — creativo</span>
+                      </div>
+                      {modelForm.temperature !== null && (
+                        <button
+                          onClick={() => setModelForm(f => ({ ...f, temperature: null }))}
+                          className="self-start text-[11px] text-gray-400 hover:text-gray-600 dark:text-zinc-500 transition-colors"
+                        >
+                          ↺ Restaurar por defecto (0.3)
+                        </button>
+                      )}
+                    </div>
                     {/* Per-model system prompt */}
                     <div className="flex flex-col gap-1">
                       <label className="text-[11px] font-medium text-gray-500 dark:text-zinc-400">
