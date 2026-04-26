@@ -273,9 +273,37 @@ class DeleteFileTool(BaseTool):
         if not resolved.exists():
             return f"Error: file not found: {resolved}"
         if resolved.is_dir():
-            return f"Error: '{resolved}' is a directory. Use a directory removal tool instead."
+            return f"Error: '{resolved}' is a directory. Use delete_directory to remove directories."
         resolved.unlink()
         return f"Deleted: {resolved}"
+
+
+class DeleteDirectoryTool(BaseTool):
+    name = "delete_directory"
+    description = (
+        "Delete a directory and all its contents recursively. "
+        "Use with caution — this is irreversible."
+    )
+    parameters = {
+        "type": "object",
+        "properties": {
+            "path": {
+                "type": "string",
+                "description": "Absolute or ~ path to the directory to delete",
+            },
+        },
+        "required": ["path"],
+    }
+
+    async def run(self, path: str, **_: Any) -> str:
+        import shutil
+        resolved = _resolve_and_check(path)
+        if not resolved.exists():
+            return f"Error: path not found: {resolved}"
+        if not resolved.is_dir():
+            return f"Error: '{resolved}' is a file. Use delete_file instead."
+        shutil.rmtree(resolved)
+        return f"Deleted directory: {resolved}"
 
 
 # Registry of all filesystem tools
@@ -487,6 +515,7 @@ FILESYSTEM_TOOLS: list[BaseTool] = [
     ListDirectoryTool(),
     SearchFilesTool(),
     DeleteFileTool(),
+    DeleteDirectoryTool(),
     GlobTool(),
     GrepTool(),
 ]

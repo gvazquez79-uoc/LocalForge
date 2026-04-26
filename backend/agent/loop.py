@@ -550,7 +550,7 @@ def _permission_type_for_tool(tool_name: str) -> str | None:
         return "execute_command"
     if tool_name in ("write_file", "edit_file"):
         return "write_file"
-    if tool_name == "delete_file":
+    if tool_name in ("delete_file", "delete_directory"):
         return "delete_file"
     return None
 
@@ -563,7 +563,7 @@ def _requires_confirmation(tool_name: str, tool_input: dict) -> bool:
         return cfg.tools.terminal.require_confirmation
     if tool_name in ("write_file", "edit_file"):
         return "write_file" in cfg.tools.filesystem.require_confirmation_for
-    if tool_name == "delete_file":
+    if tool_name in ("delete_file", "delete_directory"):
         return "delete_file" in cfg.tools.filesystem.require_confirmation_for
 
     return False
