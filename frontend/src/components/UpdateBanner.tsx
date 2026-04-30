@@ -78,6 +78,7 @@ export function UpdateBanner() {
       <div className="px-4 py-2">
         <p className="text-xs text-gray-500 dark:text-zinc-400 mb-1">
           {status.commits?.length ?? 0} cambio{(status.commits?.length ?? 0) !== 1 ? "s" : ""} nuevo{(status.commits?.length ?? 0) !== 1 ? "s" : ""}
+          {" "}· <span className="font-mono text-emerald-600 dark:text-emerald-400">{(status as any).branch ?? "main"}</span>
           {" "}· <span className="font-mono">{status.local_commit}</span> → <span className="font-mono">{status.remote_commit}</span>
         </p>
 

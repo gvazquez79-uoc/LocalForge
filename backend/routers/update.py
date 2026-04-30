@@ -30,25 +30,31 @@ def _git(*args: str, timeout: int = 30) -> tuple[int, str, str]:
 @router.get("/update/check")
 async def check_update():
     """
-    Fetch remote and compare HEAD with origin/main.
+    Fetch remote and compare HEAD with origin/<current-branch>.
     Returns whether an update is available and the list of new commits.
     """
     try:
-        # Fetch latest refs from origin (no checkout)
-        code, _, err = await asyncio.to_thread(_git, "fetch", "origin", "main", "--quiet")
+        # Detect current branch
+        _, current_branch, _ = await asyncio.to_thread(_git, "rev-parse", "--abbrev-ref", "HEAD")
+        if not current_branch or current_branch == "HEAD":
+            current_branch = "main"  # detached HEAD fallback
+
+        # Fetch latest refs for this branch
+        code, _, err = await asyncio.to_thread(_git, "fetch", "origin", current_branch, "--quiet")
         if code != 0:
             return {"error": f"git fetch failed: {err}", "update_available": False}
 
         # Current local commit
         _, local_hash, _ = await asyncio.to_thread(_git, "rev-parse", "HEAD")
-        # Latest remote commit
-        _, remote_hash, _ = await asyncio.to_thread(_git, "rev-parse", "origin/main")
+        # Latest remote commit for this branch
+        _, remote_hash, _ = await asyncio.to_thread(_git, "rev-parse", f"origin/{current_branch}")
 
         if local_hash == remote_hash:
             return {
                 "update_available": False,
                 "local_commit": local_hash[:8],
                 "remote_commit": remote_hash[:8],
+                "branch": current_branch,
                 "commits": [],
             }
 
@@ -56,7 +62,7 @@ async def check_update():
         _, log, _ = await asyncio.to_thread(
             _git,
             "log",
-            f"{local_hash}..origin/main",
+            f"{local_hash}..origin/{current_branch}",
             "--oneline",
             "--no-merges",
         )
@@ -66,6 +72,7 @@ async def check_update():
             "update_available": True,
             "local_commit": local_hash[:8],
             "remote_commit": remote_hash[:8],
+            "branch": current_branch,
             "commits": commits,
         }
 
@@ -78,10 +85,14 @@ async def check_update():
 @router.post("/update/apply")
 async def apply_update():
     """
-    Pull latest changes from origin/main and restart the backend.
+    Pull latest changes from origin/<current-branch> and restart the backend.
     """
     try:
-        code, out, err = await asyncio.to_thread(_git, "pull", "origin", "main", "--ff-only")
+        _, current_branch, _ = await asyncio.to_thread(_git, "rev-parse", "--abbrev-ref", "HEAD")
+        if not current_branch or current_branch == "HEAD":
+            current_branch = "main"
+
+        code, out, err = await asyncio.to_thread(_git, "pull", "origin", current_branch, "--ff-only")
         if code != 0:
             return {"ok": False, "error": f"git pull failed: {err or out}"}
 

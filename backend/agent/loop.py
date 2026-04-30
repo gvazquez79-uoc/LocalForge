@@ -20,6 +20,82 @@ def _get_memory_path() -> Path:
     return Path(get_config().agent.memory_file).expanduser()
 
 
+def _messages_char_count(messages: list[dict]) -> int:
+    """Estimate total character count of all messages."""
+    total = 0
+    for m in messages:
+        content = m.get("content") or ""
+        if isinstance(content, str):
+            total += len(content)
+        elif isinstance(content, list):
+            for block in content:
+                if isinstance(block, dict):
+                    total += len(str(block.get("text", "") or block.get("content", "")))
+    return total
+
+
+def _truncate_old_tool_results(
+    messages: list[dict],
+    keep_recent: int = 8,
+    max_old_result_chars: int = 300,
+) -> tuple[list[dict], int]:
+    """
+    Truncate tool result content in old messages to reduce context size.
+    The most recent `keep_recent` messages are left untouched.
+    Returns (new_messages, chars_saved).
+    """
+    if len(messages) <= keep_recent:
+        return messages, 0
+
+    cutoff = len(messages) - keep_recent
+    chars_saved = 0
+    new_messages = []
+
+    for i, msg in enumerate(messages):
+        if i >= cutoff:
+            # Recent messages — keep intact
+            new_messages.append(msg)
+            continue
+
+        role = msg.get("role", "")
+        content = msg.get("content", "")
+
+        # Truncate tool results (role="tool" with string content)
+        if role == "tool" and isinstance(content, str) and len(content) > max_old_result_chars:
+            original_len = len(content)
+            truncated = content[:max_old_result_chars]
+            chars_saved += original_len - max_old_result_chars
+            new_messages.append({
+                **msg,
+                "content": f"{truncated}\n… [truncado — {original_len - max_old_result_chars} chars omitidos]",
+            })
+            continue
+
+        # Truncate text blocks inside assistant content lists (read results, etc.)
+        if role == "assistant" and isinstance(content, list):
+            new_blocks = []
+            for block in content:
+                if (
+                    isinstance(block, dict)
+                    and block.get("type") == "text"
+                    and len(block.get("text", "")) > max_old_result_chars
+                ):
+                    original_len = len(block["text"])
+                    chars_saved += original_len - max_old_result_chars
+                    new_blocks.append({
+                        **block,
+                        "text": block["text"][:max_old_result_chars] + f"\n… [truncado]",
+                    })
+                else:
+                    new_blocks.append(block)
+            new_messages.append({**msg, "content": new_blocks})
+            continue
+
+        new_messages.append(msg)
+
+    return new_messages, chars_saved
+
+
 def _load_project_instructions(working_directory: str) -> str:
     """Load LOCALFORGE.md (or CLAUDE.md fallback) from the project root."""
     wd = Path(working_directory).expanduser()
@@ -289,6 +365,58 @@ _HALLUCINATION_PATTERNS = [
     "posibles insights que se podrían",
     "posibles análisis que se podrían",
     "lo que podría contener el dataset",
+    # False completion claims — model says "done" without calling any tool (ES)
+    "listo.",
+    "listo!",
+    "¡listo!",
+    "listo, ahora",
+    "listo. ahora",
+    "ya está.",
+    "ya está!",
+    "¡ya está!",
+    "ya lo he añadido",
+    "ya lo he implementado",
+    "ya lo he creado",
+    "ya lo he modificado",
+    "ya lo he actualizado",
+    "ya lo he corregido",
+    "ya está añadido",
+    "ya está implementado",
+    "ya está creado",
+    "ya está hecho",
+    "he añadido el",
+    "he implementado el",
+    "he creado el",
+    "he modificado el",
+    "he actualizado el",
+    "he corregido el",
+    "queda así:",
+    "quedaría así:",
+    "el código queda",
+    "déjame hacerlo ahora",
+    "dejame hacerlo ahora",
+    "voy a añadirlo ahora",
+    "lo añado ahora",
+    "lo implemento ahora",
+    # False completion claims (EN)
+    "done.",
+    "done!",
+    "all done",
+    "it's done",
+    "i've added",
+    "i've implemented",
+    "i've created",
+    "i've updated",
+    "i've fixed",
+    "i have added",
+    "i have implemented",
+    "i have created",
+    "i have updated",
+    "here's the updated",
+    "here is the updated",
+    "here's the modified",
+    "the code now looks",
+    "let me do it now",
     # "Let me..." announcements without tool call (ES)
     "déjame ver",
     "dejame ver",
@@ -637,9 +765,27 @@ async def run_agent(
         project_instructions = _load_project_instructions(working_directory)
         if project_instructions:
             system += project_instructions
+
     working_messages = list(messages)
+
+    # ── Auto-inject project tree on first message ──────────────────────────
+    # If this is the start of a conversation (1 user message) and there's a
+    # working directory, append the directory tree to the system prompt so
+    # the model already knows the project structure from the first message.
+    if working_directory and len(working_messages) == 1:
+        try:
+            from backend.tools.filesystem import ListDirectoryTool
+            _tree = await ListDirectoryTool().run(path=working_directory)
+            system += (
+                f"\n\n**Estructura actual del proyecto** (listado automático al inicio):\n"
+                f"```\n{_tree}\n```\n"
+                f"Ya conoces los archivos del proyecto — no necesitas llamar a list_directory() "
+                f"salvo que quieras ver subdirectorios específicos o refrescar tras cambios."
+            )
+        except Exception:
+            pass  # If listing fails, continue without context
     max_iter = cfg.agent.max_iterations
-    hallucination_corrections = 0  # Limit corrections to 2 per turn to avoid loops
+    hallucination_corrections = 0
     total_input_tokens = 0
     total_output_tokens = 0
 
@@ -647,17 +793,35 @@ async def run_agent(
     write_calls_this_run: int = 0
     write_calls_last_iter: int = 0
 
+    # Truncation threshold: ~60K chars — truncate old tool results when exceeded
+    COMPACT_THRESHOLD = 60_000
+
     import logging as _logging
     _loop_log = _logging.getLogger("backend.agent.loop")
 
     for iteration in range(max_iter):
         yield StreamEvent(type="iteration", data={"n": iteration + 1})
+
+        # ── Auto-truncation ────────────────────────────────────────────────
+        # When the conversation grows too large, truncate old tool results
+        # (the biggest contributors to context bloat) — no extra API call needed.
+        char_count = _messages_char_count(working_messages)
+        if char_count > COMPACT_THRESHOLD:
+            working_messages, saved = _truncate_old_tool_results(working_messages)
+            if saved > 0:
+                _loop_log.info(f"[loop] Truncated old tool results, saved {saved} chars")
+                yield StreamEvent(type="warning", data={"message": f"⚡ Contexto compactado ({saved // 1000}K caracteres liberados)"})
+
+
         _loop_log.info(f"[loop] iter={iteration+1} msgs={len(working_messages)}")
 
         tool_calls: list[dict] = []
         assistant_text = ""
         stop_reason = None
         write_calls_last_iter = 0
+        tools_ran_previous_iter = iteration > 0 and any(
+            m.get("role") == "tool" for m in working_messages[-6:]
+        )
 
         async for event in adapter.stream_chat(working_messages, schema_tools, system):
             if event.type == "text_delta":
@@ -751,19 +915,19 @@ async def run_agent(
                 if (
                     hallucination_corrections < 2
                     and assistant_text
+                    and not tools_ran_previous_iter  # legit summary after tool use
                     and not _is_capability_inquiry(working_messages)
                     and _detect_hallucinated_action(assistant_text)
                 ):
                     hallucination_corrections += 1
                     correction = (
-                        "[SISTEMA] ALTO. Has descrito una acción o anunciado lo que ibas a hacer, "
-                        "pero NO has llamado a ninguna herramienta. Eso está prohibido. "
-                        "DEBES llamar a la herramienta apropiada AHORA MISMO — sin más texto, sin anuncios. "
-                        "Herramientas disponibles: list_directory(), read_file(), write_file(), edit_file(), "
-                        "search_files(), execute_command(), web_search(), generate_image(), generate_video(), "
-                        "create_video_from_images(). "
-                        "Mira la conversación y llama a la herramienta correcta inmediatamente. "
-                        "Responde siempre en español. No digas lo que vas a hacer — simplemente HAZLO llamando a la herramienta."
+                        "[SISTEMA] PROHIBIDO. Has dicho que hiciste algo ('Listo', 'Ya está', 'He añadido...') "
+                        "o has anunciado lo que ibas a hacer, pero NO has llamado a ninguna herramienta. "
+                        "Las palabras NO ejecutan código. SOLO las herramientas ejecutan acciones reales. "
+                        "LLAMA A LA HERRAMIENTA AHORA — sin texto previo, sin explicaciones, sin 'Listo'. "
+                        "Herramientas: write_file(), edit_file(), read_file(), list_directory(), "
+                        "execute_command(), web_search(), glob(), grep(). "
+                        "Responde en español. Actúa directamente."
                     )
                     # Inject correction silently — no warning shown in the chat UI.
                     # Tell the frontend to discard the text streamed so far (the capability list)
@@ -772,10 +936,10 @@ async def run_agent(
                     working_messages.append({"role": "user", "content": correction})
                     continue
                 # ── Mid-task continuation ──────────────────────────────────
-                # If the model wrote files this iteration and then stopped
-                # without tool calls, it likely paused mid-task. Keep going
-                # automatically — max_iter is the only safety cap.
-                if write_calls_last_iter > 0:
+                # Only inject if: multiple files written this run AND the model
+                # stopped cleanly (end_turn) AND it wrote something last iter.
+                # Avoids firing on single-file edits or normal conversation.
+                if write_calls_last_iter > 0 and write_calls_this_run > 1 and stop_reason == "end_turn":
                     working_messages.append({
                         "role": "user",
                         "content": (
@@ -844,34 +1008,6 @@ async def run_agent(
             if tool_name in ("write_file", "edit_file", "create_directory"):
                 write_calls_this_run += 1
                 write_calls_last_iter += 1
-
-            # Auto-read before edit — if model wants to edit a file it hasn't
-            # read yet this session, read it first and inject the content as a
-            # user context message so old_string always matches exactly.
-            if tool_name == "edit_file":
-                file_path_to_read = tool_input.get("path", "")
-                already_read = any(
-                    m.get("role") == "tool"
-                    and isinstance(m.get("content"), str)
-                    and file_path_to_read in m.get("content", "")
-                    for m in working_messages
-                )
-                if not already_read and file_path_to_read:
-                    read_tool = tool_map.get("read_file")
-                    if read_tool:
-                        try:
-                            read_result = await read_tool.run(path=file_path_to_read)
-                            # Prepend file content as a user message so the model
-                            # has the exact current content before the edit runs.
-                            working_messages.insert(-1, {
-                                "role": "user",
-                                "content": (
-                                    f"[SISTEMA] Contenido actual de `{file_path_to_read}` "
-                                    f"(leído automáticamente antes de editar):\n\n{read_result}"
-                                ),
-                            })
-                        except Exception:
-                            pass  # If auto-read fails, proceed anyway
 
             # Execute the tool
             if tool is None:

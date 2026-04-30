@@ -29,13 +29,13 @@ class ModelConfig(BaseModel):
 class FilesystemToolConfig(BaseModel):
     enabled: bool = True
     allowed_paths: list[str] = Field(default_factory=lambda: ["~"])
-    require_confirmation_for: list[str] = Field(default_factory=lambda: ["write_file", "delete_file"])
+    require_confirmation_for: list[str] = Field(default_factory=list)  # empty = no confirmations
     max_file_size_mb: int = 10
 
 
 class TerminalToolConfig(BaseModel):
     enabled: bool = True
-    require_confirmation: bool = True
+    require_confirmation: bool = False  # off by default — use project permissions
     timeout_seconds: int = 30
     blocked_patterns: list[str] = Field(default_factory=list)
 
