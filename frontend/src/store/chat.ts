@@ -22,7 +22,7 @@ export interface ImagePayload {
 
 export interface UIMessage {
   id: string;
-  role: "user" | "assistant";
+  role: "user" | "assistant" | "system";
   content: string;
   toolCalls?: ToolCallData[];
   toolResults?: Record<string, string>; // tool_use_id → result
@@ -263,7 +263,17 @@ export const useChatStore = create<ChatState>((set, get) => ({
 
           const updated = { ...last };
 
-          if (event.type === "clear_content") {
+          if (event.type === "compacting") {
+            // Insert a system notice before the current assistant bubble
+            const saved = (event.data as { saved_chars: number }).saved_chars;
+            const notice: UIMessage = {
+              id: `compact_${Date.now()}`,
+              role: "system",
+              content: `🗜️ Optimizando memoria… ${Math.round(saved / 1000)}K liberados`,
+            };
+            msgs.splice(msgs.length - 1, 0, notice);
+            return { messages: msgs };
+          } else if (event.type === "clear_content") {
             // Model gave a bad response (capability list), correction injected silently.
             // Reset the bubble so the next iteration starts clean.
             updated.content = "";

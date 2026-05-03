@@ -9,8 +9,11 @@ Multi-model support via a unified layer — works with Ollama (native API), Anth
 
 - **Multi-model** — switch between models from any provider in a single dropdown; Ollama models auto-discovered
 - **Agent loop** — multi-turn reasoning with tool use (filesystem, terminal, web search)
-- **Tool confirmations** — sensitive actions (write/delete files, run commands) require explicit approval in the UI
-- **Image, PDF & text attachments** — drag & drop or paste; the agent reads and analyzes them; text files shown as chips (not dumped into the bubble)
+- **Per-model temperature** — configure creativity vs. precision per model from Settings (default 0.3)
+- **Tool confirmations** — sensitive actions (write/delete files, run commands) can require explicit approval; per-project permissions remembered permanently
+- **Image, PDF & text attachments** — drag & drop, file picker or **Ctrl+V paste from clipboard** (including Windows Snipping Tool); the agent reads and analyzes them
+- **Memory optimisation** — when the conversation grows large, old tool results are automatically compacted and a notice appears in the chat; threshold configurable in Settings
+- **Auto-update** — check and apply updates from GitHub directly from Settings, with branch detection and commit list
 - **Persistent chat history** — conversations stored in SQLite (default) or MySQL
 - **Persistent memory** — the agent remembers things across conversations via `~/.localforge_memory.md`
 - **Per-model system prompt** — each model can have its own system prompt that overrides the global one
@@ -19,6 +22,7 @@ Multi-model support via a unified layer — works with Ollama (native API), Anth
 - **Dark / light theme** — persisted per user
 - **API key auth** — optional password protection for server deployments
 - **Hallucination detection** — catches models that claim to use tools without actually calling them, and models that output inline tool calls as text (`icall {...}`)
+- **Mobile app** — Ionic React companion app (`LocalForge-App/`) for Android and iOS
 
 ---
 
@@ -28,6 +32,7 @@ Multi-model support via a unified layer — works with Ollama (native API), Anth
 |---|---|
 | Backend | Python 3.13+ · FastAPI · aiosqlite / aiomysql |
 | Frontend | React · Vite · TypeScript · Tailwind CSS v3 · Zustand · lucide-react |
+| Mobile | Ionic React · Capacitor (Android + iOS) |
 | Agent | Anthropic SDK · OpenAI-compatible SDK · ollama (native API) |
 | Bot | python-telegram-bot v20+ |
 
@@ -51,7 +56,7 @@ LocalForge/
 │   │   └── registry.py          # Provider → adapter resolution
 │   ├── tools/
 │   │   ├── base.py
-│   │   ├── filesystem.py
+│   │   ├── filesystem.py        # read_file, write_file, delete_file, delete_directory, list_directory
 │   │   ├── terminal.py
 │   │   └── web_search.py
 │   ├── routers/
@@ -59,13 +64,16 @@ LocalForge/
 │   │   ├── config.py
 │   │   ├── models.py
 │   │   ├── providers.py
+│   │   ├── permissions.py       # Per-project tool permissions
+│   │   ├── update.py            # GitHub auto-update (check + apply)
 │   │   ├── stats.py
 │   │   └── logs.py              # GET /api/logs · SSE /api/logs/stream
 │   ├── db/
 │   │   ├── connection.py        # SQLite/MySQL abstraction (_Wrapper)
 │   │   ├── store.py             # Conversation persistence
-│   │   ├── models_store.py      # Model CRUD (includes system_prompt column)
+│   │   ├── models_store.py      # Model CRUD (system_prompt + temperature columns)
 │   │   ├── providers_store.py   # Provider CRUD + builtin seeding
+│   │   ├── permissions_store.py # Per-project permission persistence
 │   │   └── settings_store.py    # App config stored as JSON blob
 │   ├── middleware/
 │   │   └── auth.py              # API key auth (headers + ?api_key= for SSE)
@@ -85,10 +93,22 @@ LocalForge/
 │       ├── ToolBlock.tsx
 │       ├── ModelSelector.tsx
 │       ├── SettingsPanel.tsx    # Full settings UI (config, models, providers)
+│       ├── UpdateBanner.tsx     # GitHub update checker + apply
 │       ├── StatsBar.tsx         # CPU / RAM / GPU / VRAM stats
-│       ├── ConfirmationModal.tsx # Agent tool approval dialog
+│       ├── ConfirmationModal.tsx # Agent tool approval dialog (with "always allow" option)
 │       ├── ConfirmDialog.tsx     # Generic reusable confirm dialog
 │       └── LogsPage.tsx         # Developer log viewer (route /logs)
+├── LocalForge-App/              # Ionic React mobile app
+│   └── src/
+│       ├── api/client.ts        # Mobile API client (SSE streaming)
+│       ├── store/app.ts         # Zustand state
+│       ├── pages/
+│       │   ├── Login.tsx        # Server URL + API key setup
+│       │   ├── Chat.tsx         # Streaming chat with model picker
+│       │   └── Conversations.tsx # Conversation list with swipe-to-delete
+│       └── components/
+│           ├── MessageBubble.tsx
+│           └── ModelPicker.tsx
 ├── localforge.json              # Seed config (DB is source of truth after first boot)
 ├── requirements.txt             # Python dependencies with pinned versions
 ├── .env                         # Secrets and runtime config — never commit
@@ -166,12 +186,12 @@ Used **only on first boot** to seed the database. After that, all config is mana
     "filesystem": {
       "enabled": true,
       "allowed_paths": ["~"],    // directories the agent can access
-      "require_confirmation_for": ["write_file", "delete_file"],
+      "require_confirmation_for": [],  // empty = use project permissions
       "max_file_size_mb": 10
     },
     "terminal": {
       "enabled": true,
-      "require_confirmation": true,
+      "require_confirmation": false,   // off by default — use project permissions
       "timeout_seconds": 30,
       "blocked_patterns": ["rm -rf /", "format c:"]
     },
@@ -179,6 +199,7 @@ Used **only on first boot** to seed the database. After that, all config is mana
   },
   "agent": {
     "max_iterations": 20,
+    "compact_threshold": 40000,  // chars — compacts old tool results above this limit
     "system_prompt": "..."
   },
   "telegram": {
@@ -213,20 +234,62 @@ Providers and models are fully managed from **Settings → Providers** and **Set
 >
 > **Anthropic** uses the native Anthropic SDK — do not set a base URL.
 
-### Per-model system prompt
+### Per-model configuration
 
-Each model can have its own system prompt that overrides the global one. Set it in **Settings → Models → Edit → System Prompt**. Useful for specialized agents (e.g. a coding-only model, a model that always replies in a specific language).
+Each model supports two optional overrides set in **Settings → Models → Edit**:
+
+| Field | Default | Description |
+|---|---|---|
+| **System Prompt** | _(global)_ | Overrides the global system prompt for this model only |
+| **Temperature** | `0.3` | Controls creativity: `0` = deterministic, `1` = creative |
+
+---
+
+## Memory optimisation
+
+When a conversation grows large (default threshold: **40,000 characters**), LocalForge automatically truncates old tool results — the biggest contributors to context size — while keeping recent messages intact. A notice appears in the chat:
+
+> `🗜️ Optimizando memoria… 23K liberados`
+
+The threshold is configurable in **Settings → Agent → Umbral de optimización de memoria**. Recommended values:
+- Small context models (8K tokens): `20000`
+- Standard models (32K): `40000` _(default)_
+- Large context models (128K+): `80000–100000`
+
+---
+
+## Per-project permissions
+
+When the agent requests a sensitive action (write file, delete file/directory, run command), a confirmation dialog appears. You can:
+
+- **Allow once** — approve this single action
+- **Allow always in this project** — saves permission permanently for the current working directory; the agent will not ask again for the same action type in that project
+
+Saved permissions are stored in the `project_permissions` table and can be managed via `GET/POST/DELETE /api/permissions`.
+
+---
+
+## Auto-update
+
+LocalForge can update itself from GitHub without leaving the browser:
+
+1. Go to **Settings** — an update banner appears automatically when a new version is available
+2. The banner shows the current branch, the list of new commits and their authors
+3. Click **Actualizar ahora** — runs `git pull` and reloads the frontend
+
+Requires the project to be a git clone with a configured remote (`origin`). Works on any branch.
 
 ---
 
 ## Database schema
 
 ```
-conversations  (id, title, created_at, updated_at)
-messages       (id, conversation_id, role, content, created_at, metadata)
-models         (id, name, display_name, provider, api_key, base_url, is_default, system_prompt, created_at)
-providers      (id, name, display_name, base_url, api_key_env, api_key, is_builtin, created_at)
-settings       (setting_key, value)   ← app config as JSON blob
+conversations      (id, title, created_at, updated_at)
+messages           (id, conversation_id, role, content, created_at, metadata)
+models             (id, name, display_name, provider, api_key, base_url, is_default, system_prompt, temperature, created_at)
+providers          (id, name, display_name, base_url, api_key_env, api_key, is_builtin, created_at)
+project_permissions (id, project_path, permission_type, created_at)
+settings           (setting_key, value)   ← app config as JSON blob
 ```
 
 SQLite (`localforge.db`) is used by default. Set `DATABASE_URL=mysql://...` in `.env` to use MySQL.
@@ -254,6 +317,12 @@ SQLite (`localforge.db`) is used by default. Set `DATABASE_URL=mysql://...` in `
 | `POST` | `/api/models/{id}/test` | Test model connectivity |
 | `GET/POST` | `/api/providers` | List / create providers |
 | `PUT/DELETE` | `/api/providers/{id}` | Update / delete provider |
+| `GET` | `/api/permissions` | List permissions for a project (`?project_path=...`) |
+| `POST` | `/api/permissions/grant` | Grant a permission |
+| `POST` | `/api/permissions/revoke` | Revoke a permission |
+| `DELETE` | `/api/permissions` | Clear all permissions for a project |
+| `GET` | `/api/update/check` | Check for available updates (git fetch + compare) |
+| `POST` | `/api/update/apply` | Apply update (`git pull`) |
 | `GET` | `/api/stats` | System stats (CPU, RAM, GPU/VRAM via pynvml + Ollama) |
 | `GET` | `/api/logs` | Recent log entries — `?n=500&level=ERROR` |
 | `GET` | `/api/logs/stream` | Live log stream (SSE) — `?api_key=...` |
@@ -287,11 +356,13 @@ logger.info("This appears in the log viewer automatically")
 
 | Type | How to attach | What the agent sees |
 |---|---|---|
-| Images (JPEG, PNG, GIF, WebP) | Drag & drop or 📎 button | Full image via vision API |
-| PDFs | Drag & drop or 📎 button | Extracted text via pypdf |
+| Images (JPEG, PNG, GIF, WebP) | Drag & drop, 📎 button or **Ctrl+V** | Full image via vision API |
+| PDFs | Drag & drop or 📎 button | Extracted text via pypdf (supports page ranges) |
 | Text files (`.txt`, `.py`, `.ts`, `.json`…) | Drag & drop or 📎 button | Full file contents embedded in the message |
 
 Text files are shown as a small chip above the message bubble — the raw file content is not displayed in the chat.
+
+**Ctrl+V paste** works with any image in the clipboard, including screenshots from Windows Snipping Tool (`Win+Shift+S`).
 
 PDF text extraction requires `pypdf`:
 ```bash
@@ -349,10 +420,40 @@ Commands: `/start` (reset conversation) · `/new` (new conversation)
 | **Terminal** | Enable/disable, timeout, blocked command patterns |
 | **Web Search** | Enable/disable, max results |
 | **Attachments** | Max size limits for images, PDFs and text files |
-| **Agent** | Max iterations, global system prompt |
+| **Agent** | Max iterations, memory optimisation threshold, global system prompt |
 | **Telegram** | Bot token, allowed user IDs, default model |
-| **Models** | Add, edit, delete, set default; per-model system prompt; test connectivity |
+| **Models** | Add, edit, delete, set default; per-model system prompt; temperature slider; test connectivity |
 | **Providers** | Add, edit, delete provider definitions (base URL + API key) |
+
+---
+
+## Mobile app (Ionic)
+
+The `LocalForge-App/` directory contains an Ionic React app for Android and iOS.
+
+### Setup
+
+```bash
+cd LocalForge-App
+npm install
+```
+
+### Run in browser (dev)
+
+```bash
+npm run dev
+```
+
+### Build for Android / iOS
+
+```bash
+npm run build
+npx cap sync
+npx cap open android   # opens Android Studio
+npx cap open ios       # opens Xcode
+```
+
+On first launch, enter your LocalForge server URL (e.g. `http://192.168.1.x:8000`) and API key. The config is saved locally and reconnects automatically on next open.
 
 ---
 

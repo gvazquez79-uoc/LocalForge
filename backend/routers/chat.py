@@ -227,10 +227,10 @@ async def send_message(conv_id: str, body: SendMessageRequest):
         async def _request_approval(tool_use_id: str) -> bool:
             """Block the generator until the frontend sends /approve."""
             key = f"{conv_id}:{tool_use_id}"
-            event = asyncio.Event()
-            _approval_events[key] = event
+            ev = asyncio.Event()
+            _approval_events[key] = ev
             try:
-                await asyncio.wait_for(event.wait(), timeout=300.0)  # 5 min
+                await asyncio.wait_for(ev.wait(), timeout=300.0)  # 5 min
                 return _approval_results.pop(key, False)
             except asyncio.TimeoutError:
                 return False

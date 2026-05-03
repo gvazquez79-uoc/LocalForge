@@ -1,5 +1,5 @@
 import { useEffect, useRef } from "react";
-import { AlertTriangle, AlertCircle, Info, Trash2, X } from "lucide-react";
+import { AlertTriangle, Info, Trash2, X } from "lucide-react";
 
 export interface ConfirmDialogOptions {
   title: string;

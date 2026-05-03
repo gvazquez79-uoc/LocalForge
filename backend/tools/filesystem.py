@@ -54,17 +54,22 @@ def _resolve_and_check(path: str) -> Path:
 
 class ReadFileTool(BaseTool):
     name = "read_file"
-    description = "Read the contents of a file. Returns the text content."
+    description = (
+        "Read the contents of a file. Supports text files and PDFs. "
+        "For PDFs, extracts the text from all pages. "
+        "Use the `pages` parameter to read specific pages (e.g. '1-5' or '3')."
+    )
     parameters = {
         "type": "object",
         "properties": {
             "path": {"type": "string", "description": "Absolute or ~ path to the file"},
             "encoding": {"type": "string", "description": "File encoding (default: utf-8)", "default": "utf-8"},
+            "pages": {"type": "string", "description": "Page range for PDFs, e.g. '1-5' or '3'. Omit to read all pages."},
         },
         "required": ["path"],
     }
 
-    async def run(self, path: str, encoding: str = "utf-8", **_: Any) -> str:
+    async def run(self, path: str, encoding: str = "utf-8", pages: str | None = None, **_: Any) -> str:
         resolved = _resolve_and_check(path)
         cfg = get_config().tools.filesystem
         max_bytes = cfg.max_file_size_mb * 1024 * 1024
@@ -76,10 +81,63 @@ class ReadFileTool(BaseTool):
         if resolved.stat().st_size > max_bytes:
             return f"Error: file too large (max {cfg.max_file_size_mb} MB)"
 
+        # PDF extraction
+        if resolved.suffix.lower() == ".pdf":
+            return _read_pdf(resolved, pages)
+
         try:
             return resolved.read_text(encoding=encoding)
         except UnicodeDecodeError:
             return f"Error: cannot decode file as {encoding}. It may be a binary file."
+
+
+def _read_pdf(path: Path, pages: str | None = None) -> str:
+    """Extract text from a PDF file using pypdf."""
+    try:
+        import pypdf
+    except ImportError:
+        try:
+            import PyPDF2 as pypdf  # type: ignore
+        except ImportError:
+            return (
+                "Error: no hay librería PDF instalada. "
+                "Instala con: pip install pypdf"
+            )
+
+    try:
+        reader = pypdf.PdfReader(str(path))
+        total_pages = len(reader.pages)
+
+        # Parse page range
+        page_indices: list[int] = []
+        if pages:
+            for part in pages.split(","):
+                part = part.strip()
+                if "-" in part:
+                    start, end = part.split("-", 1)
+                    page_indices.extend(range(int(start) - 1, min(int(end), total_pages)))
+                else:
+                    idx = int(part) - 1
+                    if 0 <= idx < total_pages:
+                        page_indices.append(idx)
+        else:
+            page_indices = list(range(total_pages))
+
+        extracted = []
+        for i in page_indices:
+            text = reader.pages[i].extract_text() or ""
+            extracted.append(f"--- Página {i + 1} ---\n{text.strip()}")
+
+        if not extracted:
+            return f"Error: no se encontraron páginas válidas en {path.name}"
+
+        header = f"PDF: {path.name} ({total_pages} páginas totales)"
+        if pages:
+            header += f" | Páginas leídas: {pages}"
+        return f"{header}\n\n" + "\n\n".join(extracted)
+
+    except Exception as e:
+        return f"Error leyendo PDF {path.name}: {e}"
 
 
 class WriteFileTool(BaseTool):

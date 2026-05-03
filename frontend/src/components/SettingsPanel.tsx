@@ -1052,6 +1052,14 @@ export function SettingsPanel({ open, onClose }: SettingsPanelProps) {
                   max={100}
                   onChange={(v) => updateAgent({ max_iterations: v })}
                 />
+                <NumberField
+                  label="Umbral de optimización de memoria (caracteres)"
+                  value={config.agent.compact_threshold ?? 40000}
+                  min={10000}
+                  max={200000}
+                  step={5000}
+                  onChange={(v) => updateAgent({ compact_threshold: v })}
+                />
                 <div className="space-y-1.5">
                   <div className="flex items-center justify-between">
                     <label className="text-xs font-medium text-gray-500 dark:text-zinc-400">System prompt</label>
@@ -1338,12 +1346,14 @@ function NumberField({
   value,
   min,
   max,
+  step,
   onChange,
 }: {
   label: string;
   value: number;
   min: number;
   max: number;
+  step?: number;
   onChange: (v: number) => void;
 }) {
   return (
@@ -1354,8 +1364,9 @@ function NumberField({
         value={value}
         min={min}
         max={max}
+        step={step}
         onChange={(e) => onChange(Number(e.target.value))}
-        className="w-20 bg-gray-100 border border-gray-300 dark:bg-zinc-800 dark:border-zinc-700 rounded-sm px-2 py-1 text-xs text-gray-800 dark:text-zinc-200 text-right focus:outline-none focus:border-emerald-500"
+        className="w-24 bg-gray-100 border border-gray-300 dark:bg-zinc-800 dark:border-zinc-700 rounded-sm px-2 py-1 text-xs text-gray-800 dark:text-zinc-200 text-right focus:outline-none focus:border-emerald-500"
       />
     </div>
   );

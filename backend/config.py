@@ -76,6 +76,7 @@ class ToolsConfig(BaseModel):
 class AgentConfig(BaseModel):
     max_iterations: int = 20
     memory_file: str = "~/.localforge_memory.md"
+    compact_threshold: int = 40_000  # chars — truncate old tool results above this limit
     system_prompt: str = (
         "Eres LocalForge, un asistente de IA con acceso a herramientas que te permiten trabajar "
         "directamente con el ordenador del usuario.\n\n"

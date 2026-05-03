@@ -13,7 +13,7 @@ type Level = "DEBUG" | "INFO" | "WARNING" | "ERROR" | "CRITICAL";
 
 interface LogEntry {
   ts: string;
-  level: string;
+  level: Level | string;
   logger: string;
   message: string;
 }

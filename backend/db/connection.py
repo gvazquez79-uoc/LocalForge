@@ -13,7 +13,10 @@ from typing import Any
 from urllib.parse import urlparse
 
 _DATABASE_URL: str = os.getenv("DATABASE_URL", "")
-DB_PATH = Path("./localforge.db")
+
+# If DATA_DIR is set (e.g. Docker volume), store the DB there; otherwise use cwd.
+_data_dir = os.getenv("DATA_DIR", "")
+DB_PATH = Path(_data_dir) / "localforge.db" if _data_dir else Path("./localforge.db")
 
 _mysql_pool: Any = None
 _mysql_available: bool = False   # set to True only after a successful init_pool()

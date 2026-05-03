@@ -1,0 +1,27 @@
+# Python
+__pycache__/
+*.pyc
+*.pyo
+.venv/
+venv/
+*.egg-info/
+
+# Frontend
+frontend/node_modules/
+frontend/dist/
+
+# Mobile app
+LocalForge-App/node_modules/
+LocalForge-App/android/
+LocalForge-App/ios/
+
+# Data / secrets
+localforge.db
+.env
+*.log
+
+# Dev
+.git/
+.gitignore
+node_modules/
+deploy/

@@ -1,0 +1,30 @@
+services:
+
+  backend:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      - LOCALFORGE_HOST=0.0.0.0
+      - LOCALFORGE_PORT=8000
+    volumes:
+      # Persist SQLite DB and memory file outside the container
+      - localforge_data:/data
+    # Backend is NOT exposed to the outside — only reachable by frontend via Docker network
+    expose:
+      - "8000"
+
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    ports:
+      - "80:80"
+    depends_on:
+      - backend
+
+volumes:
+  localforge_data:

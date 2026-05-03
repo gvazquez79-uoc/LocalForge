@@ -106,7 +106,19 @@ function parseThinking(raw: string): { main: string; isThinking: boolean } {
 
 export const Message = memo(function Message({ message }: MessageProps) {
   const isUser = message.role === "user";
+  const isSystem = message.role === "system";
   const { renderMarkdown, showToolCalls } = usePrefs();
+
+  // System notices (compacting, etc.) — render as a slim centered pill
+  if (isSystem) {
+    return (
+      <div className="flex justify-center my-2">
+        <div className="flex items-center gap-1.5 px-3 py-1 rounded-full text-xs text-zinc-400 dark:text-zinc-500 bg-zinc-100 dark:bg-zinc-800/60 border border-zinc-200 dark:border-zinc-700 select-none">
+          {message.content}
+        </div>
+      </div>
+    );
+  }
   const [thinkExpanded, setThinkExpanded] = useState(false);
 
   // Parse thinking tokens out of the content

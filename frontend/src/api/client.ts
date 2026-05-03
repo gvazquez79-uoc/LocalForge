@@ -80,7 +80,7 @@ export interface ModelInfo {
 }
 
 export interface StreamEvent {
-  type: "text_delta" | "tool_call" | "tool_result" | "iteration" | "done" | "error" | "warning" | "title_updated" | "tool_confirmation_needed" | "clear_content";
+  type: "text_delta" | "tool_call" | "tool_result" | "iteration" | "done" | "error" | "warning" | "title_updated" | "tool_confirmation_needed" | "clear_content" | "usage" | "compacting";
   data: Record<string, unknown>;
 }
 
@@ -191,6 +191,7 @@ export interface LocalForgeConfig {
     max_iterations: number;
     memory_file: string;
     system_prompt: string;
+    compact_threshold: number;
   };
   telegram: {
     enabled: boolean;
@@ -308,6 +309,7 @@ export interface DbModel {
   base_url: string | null;
   is_default: boolean;
   system_prompt: string | null;
+  temperature: number | null;
 }
 
 export interface DbModelCreate {
@@ -318,6 +320,7 @@ export interface DbModelCreate {
   base_url?: string;
   is_default?: boolean;
   system_prompt?: string | null;
+  temperature?: number | null;
 }
 
 export interface DbModelUpdate {
@@ -328,6 +331,7 @@ export interface DbModelUpdate {
   base_url?: string | null;
   is_default?: boolean;
   system_prompt?: string | null; // null = keep, "" = clear
+  temperature?: number | null;
 }
 
 export async function listDbModels(): Promise<DbModel[]> {

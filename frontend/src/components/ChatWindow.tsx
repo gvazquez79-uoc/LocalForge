@@ -204,6 +204,52 @@ export function ChatWindow() {
   };
   const handleDragOver = (e: React.DragEvent) => { e.preventDefault(); e.stopPropagation(); };
 
+  // ── Paste image from clipboard (Ctrl+V / Cmd+V) ───────────────────────────
+  // Listen at window level — more reliable than textarea onPaste for images.
+
+  useEffect(() => {
+    const onWindowPaste = async (e: ClipboardEvent) => {
+      if (!e.clipboardData) return;
+      const items = Array.from(e.clipboardData.items);
+
+      // Strategy 1: items explicitly typed as images
+      let imageItems = items.filter(item => item.type.startsWith("image/"));
+
+      // Strategy 2: items with kind==="file" but no/unknown MIME (Windows Snipping Tool, etc.)
+      if (imageItems.length === 0) {
+        const fileItems = items.filter(item => item.kind === "file" && item.getAsFile() !== null);
+        // Only intercept if they look like images (check actual file type after extraction)
+        const extracted = fileItems
+          .map(item => item.getAsFile())
+          .filter((f): f is File => f !== null)
+          .filter(f => f.type.startsWith("image/") || f.type === "" || f.type === "application/octet-stream");
+        if (extracted.length > 0) {
+          e.preventDefault();
+          const files = extracted.map(f => {
+            const mimeType = f.type || "image/png";
+            const ext = mimeType.split("/")[1]?.split("+")[0] ?? "png";
+            return new window.File([f as BlobPart], `captura_${Date.now()}.${ext}`, { type: mimeType });
+          });
+          await processFiles(files);
+          return;
+        }
+      }
+
+      if (imageItems.length === 0) return; // no image → let normal paste happen
+      e.preventDefault();
+      const files = imageItems
+        .map(item => item.getAsFile())
+        .filter((f): f is File => f !== null)
+        .map(f => {
+          const ext = f.type.split("/")[1]?.split("+")[0] ?? "png";
+          return new window.File([f as BlobPart], `captura_${Date.now()}.${ext}`, { type: f.type });
+        });
+      if (files.length > 0) await processFiles(files);
+    };
+    window.addEventListener("paste", onWindowPaste);
+    return () => window.removeEventListener("paste", onWindowPaste);
+  }, [processFiles]);
+
   // ── File picker ───────────────────────────────────────────────────────────
 
   const handleFileInput = useCallback(async (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -475,7 +521,7 @@ export function ChatWindow() {
             placeholder={
               totalAttachments > 0
                 ? "Añade un mensaje... (los archivos se adjuntarán)"
-                : "Escribe a LocalForge… (Enter para enviar, Shift+Enter para nueva línea)"
+                : "Escribe a LocalForge… (Enter para enviar, Shift+Enter para nueva línea, Ctrl+V para pegar imagen)"
             }
             rows={1}
             className="flex-1 resize-none bg-gray-100 border border-gray-300 dark:bg-zinc-800 dark:border-zinc-700 rounded-xl px-4 py-3 text-sm text-gray-900 dark:text-zinc-100 placeholder-gray-400 dark:placeholder-zinc-500 focus:outline-none focus:border-emerald-500 transition-colors"

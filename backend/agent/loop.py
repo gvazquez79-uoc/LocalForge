@@ -16,7 +16,13 @@ from backend.models.base import BaseModelAdapter, StreamEvent
 from backend.tools.base import BaseTool
 
 def _get_memory_path() -> Path:
-    """Return the resolved Path for the persistent memory file (from config)."""
+    """Return the resolved Path for the persistent memory file.
+    If DATA_DIR is set (Docker volume), stores the file there instead of ~.
+    """
+    import os
+    data_dir = os.getenv("DATA_DIR", "")
+    if data_dir:
+        return Path(data_dir) / "localforge_memory.md"
     return Path(get_config().agent.memory_file).expanduser()
 
 
@@ -793,8 +799,8 @@ async def run_agent(
     write_calls_this_run: int = 0
     write_calls_last_iter: int = 0
 
-    # Truncation threshold: ~60K chars — truncate old tool results when exceeded
-    COMPACT_THRESHOLD = 60_000
+    # Truncation threshold — configurable via Settings > Agent > compact_threshold
+    COMPACT_THRESHOLD = get_config().agent.compact_threshold
 
     import logging as _logging
     _loop_log = _logging.getLogger("backend.agent.loop")
@@ -810,7 +816,7 @@ async def run_agent(
             working_messages, saved = _truncate_old_tool_results(working_messages)
             if saved > 0:
                 _loop_log.info(f"[loop] Truncated old tool results, saved {saved} chars")
-                yield StreamEvent(type="warning", data={"message": f"⚡ Contexto compactado ({saved // 1000}K caracteres liberados)"})
+                yield StreamEvent(type="compacting", data={"saved_chars": saved})
 
 
         _loop_log.info(f"[loop] iter={iteration+1} msgs={len(working_messages)}")
