@@ -3,16 +3,19 @@ import { Sidebar } from "./components/Sidebar";
 import { ChatWindow } from "./components/ChatWindow";
 import { SettingsPanel } from "./components/SettingsPanel";
 import { LoginScreen } from "./components/LoginScreen";
+import { SetupScreen } from "./components/SetupScreen";
 import { UpdateBanner } from "./components/UpdateBanner";
+import { UsersPage } from "./pages/UsersPage";
 import { checkAuth } from "./api/client";
 
-type AuthState = "checking" | "ok" | "required" | "offline";
+type AuthState = "checking" | "ok" | "required" | "setup" | "offline";
 
 const RETRY_INTERVAL_MS = 3000;
 const MAX_RETRIES = 10; // ~30s before giving up and showing offline message
 
 export default function App() {
   const [settingsOpen, setSettingsOpen] = useState(false);
+  const [usersOpen, setUsersOpen]       = useState(false);
   const [authState, setAuthState]       = useState<AuthState>("checking");
   const [retryCount, setRetryCount]     = useState(0);
   const retryTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -23,6 +26,8 @@ export default function App() {
       setAuthState("ok");
     } else if (result === "auth_required") {
       setAuthState("required");
+    } else if (result === "setup_required") {
+      setAuthState("setup");
     } else {
       // Backend offline — retry automatically up to MAX_RETRIES
       if (attempt < MAX_RETRIES) {
@@ -83,13 +88,21 @@ export default function App() {
     );
   }
 
+  if (authState === "setup") {
+    return <SetupScreen onSuccess={() => setAuthState("ok")} />;
+  }
+
   if (authState === "required") {
     return <LoginScreen onSuccess={() => setAuthState("ok")} />;
   }
 
+  if (usersOpen) {
+    return <UsersPage onBack={() => setUsersOpen(false)} />;
+  }
+
   return (
     <div className="flex h-screen bg-white dark:bg-zinc-950 overflow-hidden">
-      <Sidebar onSettings={() => setSettingsOpen(true)} />
+      <Sidebar onSettings={() => setSettingsOpen(true)} onUsers={() => setUsersOpen(true)} />
       <main className="flex-1 flex flex-col min-w-0">
         <ChatWindow />
       </main>

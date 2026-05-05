@@ -104,10 +104,13 @@ function parseThinking(raw: string): { main: string; isThinking: boolean } {
   return { main, isThinking };
 }
 
+const COLLAPSE_THRESHOLD = 1200; // chars — user messages longer than this get collapsed
+
 export const Message = memo(function Message({ message }: MessageProps) {
   const isUser = message.role === "user";
   const isSystem = message.role === "system";
   const { renderMarkdown, showToolCalls } = usePrefs();
+  const [expanded, setExpanded] = useState(false);
 
   // System notices (compacting, etc.) — render as a slim centered pill
   if (isSystem) {
@@ -216,33 +219,50 @@ export const Message = memo(function Message({ message }: MessageProps) {
           </div>
         )}
 
-        {(visibleContent || (message.isStreaming && !isThinking)) && (
-          <div
-            className={`px-4 py-3 rounded-2xl text-sm leading-relaxed ${
-              visibleContent?.includes("⚠️ **Error:**")
-                ? "bg-red-50 text-red-900 rounded-tl-sm dark:bg-red-900/20 dark:text-red-200 border border-red-200 dark:border-red-800"
-                : isUser
-                ? "bg-emerald-600 text-white rounded-tr-sm"
-                : "bg-gray-100 text-gray-900 rounded-tl-sm dark:bg-zinc-800 dark:text-zinc-100"
-            }`}
-          >
-            {message.isStreaming && !visibleContent ? (
-              <span className="inline-flex gap-1">
-                <span className="animate-bounce delay-0">.</span>
-                <span className="animate-bounce delay-100">.</span>
-                <span className="animate-bounce delay-200">.</span>
-              </span>
-            ) : html ? (
-              <div className="prose-chat" dangerouslySetInnerHTML={{ __html: html }} />
-            ) : (
-              <div className="whitespace-pre-wrap font-sans break-words">{visibleContent}</div>
-            )}
+        {(visibleContent || (message.isStreaming && !isThinking)) && (() => {
+          const isLong = isUser && !message.isStreaming && (visibleContent?.length ?? 0) > COLLAPSE_THRESHOLD;
+          const displayContent = isLong && !expanded
+            ? visibleContent!.slice(0, COLLAPSE_THRESHOLD)
+            : visibleContent;
 
-            {message.isStreaming && visibleContent && (
-              <span className="inline-block w-0.5 h-4 bg-gray-400 dark:bg-zinc-400 animate-pulse ml-0.5 align-text-bottom" />
-            )}
-          </div>
-        )}
+          return (
+            <div
+              className={`px-4 py-3 rounded-2xl text-sm leading-relaxed ${
+                visibleContent?.includes("⚠️ **Error:**")
+                  ? "bg-red-50 text-red-900 rounded-tl-sm dark:bg-red-900/20 dark:text-red-200 border border-red-200 dark:border-red-800"
+                  : isUser
+                  ? "bg-emerald-600 text-white rounded-tr-sm"
+                  : "bg-gray-100 text-gray-900 rounded-tl-sm dark:bg-zinc-800 dark:text-zinc-100"
+              }`}
+            >
+              {message.isStreaming && !visibleContent ? (
+                <span className="inline-flex gap-1">
+                  <span className="animate-bounce delay-0">.</span>
+                  <span className="animate-bounce delay-100">.</span>
+                  <span className="animate-bounce delay-200">.</span>
+                </span>
+              ) : html ? (
+                <div className="prose-chat" dangerouslySetInnerHTML={{ __html: html }} />
+              ) : (
+                <div className="whitespace-pre-wrap font-sans break-words">{displayContent}</div>
+              )}
+
+              {message.isStreaming && visibleContent && (
+                <span className="inline-block w-0.5 h-4 bg-gray-400 dark:bg-zinc-400 animate-pulse ml-0.5 align-text-bottom" />
+              )}
+
+              {isLong && (
+                <button
+                  onClick={() => setExpanded(v => !v)}
+                  className="mt-2 flex items-center gap-1 text-xs font-medium text-white/70 hover:text-white transition-colors"
+                >
+                  <ChevronDown size={13} className={`transition-transform ${expanded ? "rotate-180" : ""}`} />
+                  {expanded ? "Mostrar menos" : `Mostrar todo (${Math.round((visibleContent?.length ?? 0) / 1000)}K caracteres)`}
+                </button>
+              )}
+            </div>
+          );
+        })()}
 
         {!isUser && !message.isStreaming && showToolCalls && message.usage && (
           <div className="flex items-center gap-1.5 text-[11px] text-gray-400 dark:text-zinc-500 mt-0.5 px-1">

@@ -31,7 +31,7 @@ import {
   getConfig, saveConfig, restartTelegramBot,
   listDbModels, createDbModel, updateDbModel, deleteDbModel, setDefaultDbModel, testDbModel,
   listProviders, createProvider, updateProvider, deleteProvider, discoverProviderModels,
-  getMemory, clearMemory,
+  getMemory, clearMemory, getApiKey,
 } from "../api/client";
 import type { LocalForgeConfig, DbModel, DbProvider, DbProviderUpdate } from "../api/client";
 import { getStoredTheme, setTheme } from "../store/theme";
@@ -71,6 +71,12 @@ export function SettingsPanel({ open, onClose }: SettingsPanelProps) {
   const [error, setError] = useState<string | null>(null);
   const [telegramStatus, setTelegramStatus] = useState<"idle" | "restarting" | "ok" | "error">("idle");
   const [tokenAlreadySet, setTokenAlreadySet] = useState(false);
+
+  // ── GitHub Copilot state ──────────────────────────────────────────────────
+  const [copilotStatus, setCopilotStatus] = useState<"unknown" | "connected" | "disconnected">("unknown");
+  const [copilotUsername, setCopilotUsername] = useState("");
+  const [copilotFlow, setCopilotFlow] = useState<{ userCode: string; verificationUri: string; deviceCode: string } | null>(null);
+  const [copilotPolling, setCopilotPolling] = useState(false);
   const [theme, setThemeState] = useState<Theme>(getStoredTheme);
 
   // ── Models state ──────────────────────────────────────────────────────────
@@ -366,6 +372,7 @@ export function SettingsPanel({ open, onClose }: SettingsPanelProps) {
       setTelegramStatus("idle");
       listProviders().then(setProviders).catch(() => {});
       listDbModels().then(setDbModels).catch(() => {});
+      loadCopilotStatus();
       getConfig()
         .then((cfg) => {
           // If server masked the token with ***, show empty field so user knows to re-enter
@@ -417,6 +424,71 @@ export function SettingsPanel({ open, onClose }: SettingsPanelProps) {
 
   const updateAgent = (patch: Partial<LocalForgeConfig["agent"]>) =>
     setConfig((c) => (c ? { ...c, agent: { ...c.agent, ...patch } } : c));
+
+  // ── GitHub Copilot helpers ────────────────────────────────────────────────
+  const API_BASE = (import.meta.env.VITE_API_BASE as string | undefined) ?? "http://localhost:8000/api";
+
+  const loadCopilotStatus = async () => {
+    try {
+      const r = await fetch(`${API_BASE}/github/copilot/status`, { headers: { "X-API-Key": getApiKey() } });
+      const data = await r.json();
+      setCopilotStatus(data.connected ? "connected" : "disconnected");
+      setCopilotUsername(data.username ?? "");
+    } catch { setCopilotStatus("disconnected"); }
+  };
+
+  const startCopilotConnect = async () => {
+    try {
+      const r = await fetch(`${API_BASE}/github/copilot/connect`, { method: "POST", headers: { "X-API-Key": getApiKey() } });
+      if (!r.ok) { alert(await r.text()); return; }
+      const data = await r.json();
+      setCopilotFlow({ userCode: data.user_code, verificationUri: data.verification_uri, deviceCode: data.device_code });
+      pollCopilot(data.device_code, data.interval ?? 5);
+    } catch (e) { alert(String(e)); }
+  };
+
+  const pollCopilot = (deviceCode: string, initialInterval: number) => {
+    setCopilotPolling(true);
+    let currentInterval = initialInterval * 1000;
+    let timeoutId: ReturnType<typeof setTimeout>;
+
+    const doPoll = async () => {
+      try {
+        const r = await fetch(`${API_BASE}/github/copilot/poll`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json", "X-API-Key": getApiKey() },
+          body: JSON.stringify({ device_code: deviceCode }),
+        });
+        const data = await r.json();
+        if (data.ok) {
+          setCopilotPolling(false);
+          setCopilotFlow(null);
+          setCopilotStatus("connected");
+          setCopilotUsername(data.username ?? "");
+          return; // stop polling
+        } else if (data.slow_down && data.interval) {
+          // GitHub asked us to slow down — use their interval
+          currentInterval = data.interval * 1000;
+        } else if (!data.pending) {
+          setCopilotPolling(false);
+          alert(data.detail ?? "Error al conectar con GitHub");
+          return; // stop polling
+        }
+      } catch { /* keep polling */ }
+      timeoutId = setTimeout(doPoll, currentInterval);
+    };
+
+    timeoutId = setTimeout(doPoll, currentInterval);
+    // Store cancel fn (not used here but could be exposed)
+    return () => clearTimeout(timeoutId);
+  };
+
+  const disconnectCopilot = async () => {
+    await fetch(`${API_BASE}/github/copilot/disconnect`, { method: "DELETE", headers: { "X-API-Key": getApiKey() } });
+    setCopilotStatus("disconnected");
+    setCopilotUsername("");
+    setCopilotFlow(null);
+  };
 
   const updateTelegram = (patch: Partial<LocalForgeConfig["telegram"]>) => {
     setTelegramStatus("idle");
@@ -479,7 +551,7 @@ export function SettingsPanel({ open, onClose }: SettingsPanelProps) {
         </div>
 
         {/* Body */}
-        <div className="flex-1 overflow-y-auto px-5 py-4 space-y-6">
+        <div className="flex-1 overflow-y-auto px-5 py-4 space-y-2">
           {/* ── Appearance ── */}
           <Section icon={<Monitor size={15} />} title="Appearance">
             <div className="flex items-center justify-between gap-3">
@@ -527,7 +599,7 @@ export function SettingsPanel({ open, onClose }: SettingsPanelProps) {
           ) : (
             <>
               {/* ── Models ── */}
-              <Section icon={<Cpu size={15} />} title="Models">
+              <Section icon={<Cpu size={15} />} title="Models" defaultOpen>
                 <div className="space-y-2">
                   {dbModels.map((m) => (
                     <div key={m.id}>
@@ -1134,6 +1206,69 @@ export function SettingsPanel({ open, onClose }: SettingsPanelProps) {
                 )}
               </Section>
 
+              {/* ── GitHub Copilot ── */}
+              <Section icon={<span style={{ fontSize: 15 }}>🐙</span>} title="GitHub Copilot">
+                {copilotStatus === "connected" ? (
+                  <div className="space-y-3">
+                    <div className="flex items-center gap-2 text-sm text-emerald-600 dark:text-emerald-400">
+                      <span className="w-2 h-2 rounded-full bg-emerald-500 inline-block" />
+                      Conectado como <strong>{copilotUsername}</strong>
+                    </div>
+                    <p className="text-xs text-gray-500 dark:text-zinc-400">
+                      Los modelos de Copilot están disponibles en el selector de modelos del chat.
+                    </p>
+                    <button
+                      onClick={disconnectCopilot}
+                      className="text-xs text-red-500 hover:text-red-400 transition-colors"
+                    >
+                      Desconectar
+                    </button>
+                  </div>
+                ) : copilotFlow ? (
+                  <div className="space-y-3">
+                    <p className="text-xs text-gray-600 dark:text-zinc-300">
+                      1. Ve a{" "}
+                      <a href={copilotFlow.verificationUri} target="_blank" rel="noreferrer"
+                        className="text-emerald-600 dark:text-emerald-400 underline">
+                        {copilotFlow.verificationUri}
+                      </a>
+                    </p>
+                    <p className="text-xs text-gray-600 dark:text-zinc-300">
+                      2. Introduce este código:
+                    </p>
+                    <div className="flex items-center justify-center">
+                      <span className="font-mono text-2xl font-bold tracking-widest text-emerald-600 dark:text-emerald-400 bg-emerald-50 dark:bg-emerald-900/20 px-4 py-2 rounded-lg border border-emerald-200 dark:border-emerald-800">
+                        {copilotFlow.userCode}
+                      </span>
+                    </div>
+                    <div className="flex items-center gap-2 text-xs text-gray-500 dark:text-zinc-400">
+                      <svg className="animate-spin w-3 h-3" viewBox="0 0 24 24" fill="none">
+                        <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"/>
+                        <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v8z"/>
+                      </svg>
+                      Esperando autorización…
+                    </div>
+                    <button onClick={() => { setCopilotFlow(null); setCopilotPolling(false); }}
+                      className="text-xs text-gray-400 hover:text-gray-600 dark:hover:text-zinc-200 transition-colors">
+                      Cancelar
+                    </button>
+                  </div>
+                ) : (
+                  <div className="space-y-3">
+                    <p className="text-xs text-gray-500 dark:text-zinc-400">
+                      Conecta tu cuenta de GitHub para usar GPT-4o, Claude, Gemini y más modelos incluidos en tu suscripción a Copilot.
+                    </p>
+                    <button
+                      onClick={startCopilotConnect}
+                      disabled={copilotPolling}
+                      className="flex items-center gap-2 px-3 py-2 bg-gray-900 hover:bg-gray-700 dark:bg-zinc-700 dark:hover:bg-zinc-600 text-white text-xs rounded-lg transition-colors disabled:opacity-50"
+                    >
+                      <span>🐙</span> Conectar con GitHub
+                    </button>
+                  </div>
+                )}
+              </Section>
+
               {/* ── Telegram ── */}
               <Section icon={<Send size={15} />} title="Telegram">
                 <Toggle
@@ -1271,18 +1406,37 @@ function Section({
   icon,
   title,
   children,
+  defaultOpen = false,
 }: {
   icon: React.ReactNode;
   title: string;
   children: React.ReactNode;
+  defaultOpen?: boolean;
 }) {
+  const [open, setOpen] = useState(defaultOpen);
   return (
-    <div>
-      <div className="flex items-center gap-2 mb-3">
-        <span className="text-lime-500 dark:text-emerald-400">{icon}</span>
-        <h3 className="text-sm font-medium text-gray-800 dark:text-zinc-200">{title}</h3>
-      </div>
-      <div className="space-y-3 pl-1">{children}</div>
+    <div className="border border-gray-200 dark:border-zinc-800 rounded-lg overflow-hidden">
+      <button
+        type="button"
+        onClick={() => setOpen(v => !v)}
+        className="w-full flex items-center justify-between gap-2 px-3 py-2.5 bg-gray-50 dark:bg-zinc-900 hover:bg-gray-100 dark:hover:bg-zinc-800 transition-colors"
+      >
+        <div className="flex items-center gap-2">
+          <span className="text-emerald-500 dark:text-emerald-400">{icon}</span>
+          <h3 className="text-sm font-medium text-gray-800 dark:text-zinc-200">{title}</h3>
+        </div>
+        <svg
+          className={`w-3.5 h-3.5 text-gray-400 dark:text-zinc-500 transition-transform duration-200 ${open ? "rotate-180" : ""}`}
+          fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2.5}
+        >
+          <path strokeLinecap="round" strokeLinejoin="round" d="M19 9l-7 7-7-7" />
+        </svg>
+      </button>
+      {open && (
+        <div className="px-3 py-3 space-y-3 bg-white dark:bg-zinc-950">
+          {children}
+        </div>
+      )}
     </div>
   );
 }

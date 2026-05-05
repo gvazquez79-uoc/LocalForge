@@ -1,9 +1,9 @@
 import { useEffect, useRef, useState } from "react";
-import { Plus, Trash2, MessageSquare, Hammer, Settings, Pencil, Database, ScrollText, Bug, Radar, Check, X, Loader, RefreshCw } from "lucide-react";
+import { Plus, Trash2, MessageSquare, Hammer, Settings, Pencil, Database, ScrollText, Bug, Radar, Check, X, Loader, RefreshCw, Users } from "lucide-react";
 import { useChatStore } from "../store/chat";
 import { ModelSelector } from "./ModelSelector";
 import { StatsBar } from "./StatsBar";
-import { checkHealth, discoverOllamaModels, createDbModel } from "../api/client";
+import { checkHealth, discoverOllamaModels, createDbModel, getStoredUser } from "../api/client";
 import type { HealthStatus, DiscoveredModel } from "../api/client";
 import { usePrefs } from "../store/prefs";
 
@@ -62,9 +62,10 @@ function StatusLed({ status, title }: { status: ConnStatus; title: string }) {
 
 interface SidebarProps {
   onSettings: () => void;
+  onUsers: () => void;
 }
 
-export function Sidebar({ onSettings }: SidebarProps) {
+export function Sidebar({ onSettings, onUsers }: SidebarProps) {
   const { apiStatus, dbStatus, dbType } = useConnectionStatus();
   const { devMode, setDevMode } = usePrefs();
   const {
@@ -244,6 +245,17 @@ export function Sidebar({ onSettings }: SidebarProps) {
           <Settings size={15} />
           Settings
         </button>
+
+        {/* Users management — admin only */}
+        {getStoredUser()?.is_admin && (
+          <button
+            onClick={onUsers}
+            className="flex items-center gap-2 w-full px-3 py-2 rounded-sm text-gray-500 hover:text-gray-800 hover:bg-gray-100 dark:text-zinc-500 dark:hover:text-zinc-200 dark:hover:bg-zinc-800 text-sm transition-colors"
+          >
+            <Users size={15} />
+            Usuarios
+          </button>
+        )}
 
         {/* Developer mode toggle */}
         <label className="flex items-center gap-2 px-3 py-2 rounded-sm cursor-pointer

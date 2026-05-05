@@ -56,3 +56,15 @@ async def get_app_config() -> dict | None:
 async def save_app_config(data: dict) -> None:
     """Persist config dict to DB."""
     await _set_setting(_CONFIG_KEY, json.dumps(data, ensure_ascii=False))
+
+
+# ── Generic key/value helpers (used by github_copilot, etc.) ─────────────────
+
+async def get_setting(key: str) -> str | None:
+    """Return a raw string value by key, or None."""
+    return await _get_setting(key)
+
+
+async def set_setting(key: str, value: str) -> None:
+    """Persist a raw string value by key."""
+    await _set_setting(key, value)

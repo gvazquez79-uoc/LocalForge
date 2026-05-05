@@ -22,7 +22,7 @@ setup_logging()
 from backend.config import load_config, get_settings, refresh_config_from_db, refresh_models_from_db, refresh_providers_cache
 from backend.db.connection import init_pool, close_pool
 from backend.db.store import init_db
-from backend.middleware.auth import api_key_middleware
+from backend.middleware.auth import auth_middleware
 from backend.routers.chat import router as chat_router
 from backend.routers.config import router as config_router
 from backend.routers.models import router as models_router
@@ -31,6 +31,9 @@ from backend.routers.stats import router as stats_router
 from backend.routers.logs import router as logs_router
 from backend.routers.permissions import router as permissions_router
 from backend.routers.update import router as update_router
+from backend.routers.github_copilot import router as github_copilot_router
+from backend.routers.auth import router as auth_router
+from backend.routers.users import router as users_router
 
 
 @asynccontextmanager
@@ -70,6 +73,10 @@ async def lifespan(app: FastAPI):
     # Init permissions table
     from backend.db.permissions_store import init_permissions_table
     await init_permissions_table()
+
+    # Init users table
+    from backend.db.users_store import init_users_table
+    await init_users_table()
 
     # Init models table and seed from localforge.json if empty
     # refresh_models_from_db runs AFTER refresh_config_from_db so DB models win
@@ -116,7 +123,7 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-app.middleware("http")(api_key_middleware)
+app.middleware("http")(auth_middleware)
 
 app.include_router(chat_router,      prefix="/api")
 app.include_router(config_router,    prefix="/api")
@@ -124,8 +131,11 @@ app.include_router(models_router,    prefix="/api")
 app.include_router(providers_router, prefix="/api")
 app.include_router(stats_router,     prefix="/api")
 app.include_router(logs_router,      prefix="/api")
-app.include_router(permissions_router, prefix="/api")
-app.include_router(update_router,     prefix="/api")
+app.include_router(permissions_router,    prefix="/api")
+app.include_router(update_router,         prefix="/api")
+app.include_router(github_copilot_router, prefix="/api")
+app.include_router(auth_router,           prefix="/api")
+app.include_router(users_router,          prefix="/api")
 
 
 @app.post("/api/dev/restart")

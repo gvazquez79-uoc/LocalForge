@@ -3,11 +3,15 @@
 // Configurable con: VITE_API_BASE=https://tu-servidor.com/api npm run build
 const BASE = (import.meta.env.VITE_API_BASE as string | undefined) ?? "http://localhost:8000/api";
 
-// ── API Key auth ──────────────────────────────────────────────────────────────
-const STORAGE_KEY_AUTH = "localforge_api_key";
+// ── Auth token (JWT or legacy API key) ───────────────────────────────────────
+const STORAGE_KEY_AUTH = "localforge_api_key";  // kept for compat
+const STORAGE_KEY_JWT  = "localforge_jwt";
+const STORAGE_KEY_USER = "localforge_user";
 
 export function getApiKey(): string {
-  return localStorage.getItem(STORAGE_KEY_AUTH) ?? "";
+  return localStorage.getItem(STORAGE_KEY_JWT)
+      ?? localStorage.getItem(STORAGE_KEY_AUTH)
+      ?? "";
 }
 
 export function setApiKey(key: string): void {
@@ -15,23 +19,159 @@ export function setApiKey(key: string): void {
   else localStorage.removeItem(STORAGE_KEY_AUTH);
 }
 
-/** Returns auth headers if a key is stored, empty object otherwise */
-function authHeaders(): Record<string, string> {
-  const key = getApiKey();
-  return key ? { "X-API-Key": key } : {};
+export function setJwt(token: string, persist = true): void {
+  if (token) {
+    // If remember=true → localStorage (survives browser close)
+    // If remember=false → sessionStorage (cleared on tab/window close)
+    if (persist) localStorage.setItem(STORAGE_KEY_JWT, token);
+    else sessionStorage.setItem(STORAGE_KEY_JWT, token);
+  } else {
+    localStorage.removeItem(STORAGE_KEY_JWT);
+    sessionStorage.removeItem(STORAGE_KEY_JWT);
+  }
 }
 
-export type AuthCheckResult = "ok" | "auth_required" | "offline";
+export function getJwt(): string {
+  return localStorage.getItem(STORAGE_KEY_JWT)
+      ?? sessionStorage.getItem(STORAGE_KEY_JWT)
+      ?? "";
+}
 
-/** Check if the current key is valid (or if auth is disabled on the server) */
+export function getStoredUser(): User | null {
+  const raw = localStorage.getItem(STORAGE_KEY_USER);
+  if (!raw) return null;
+  try { return JSON.parse(raw) as User; } catch { return null; }
+}
+
+export function setStoredUser(user: User | null): void {
+  if (user) localStorage.setItem(STORAGE_KEY_USER, JSON.stringify(user));
+  else localStorage.removeItem(STORAGE_KEY_USER);
+}
+
+export function clearAuth(): void {
+  localStorage.removeItem(STORAGE_KEY_JWT);
+  sessionStorage.removeItem(STORAGE_KEY_JWT);
+  localStorage.removeItem(STORAGE_KEY_AUTH);
+  localStorage.removeItem(STORAGE_KEY_USER);
+}
+
+/** Returns auth headers — uses JWT if available, falls back to API key */
+function authHeaders(): Record<string, string> {
+  const token = getJwt() || getApiKey();
+  return token ? { "Authorization": `Bearer ${token}` } : {};
+}
+
+// ── User types ────────────────────────────────────────────────────────────────
+export interface User {
+  id: string;
+  first_name: string;
+  last_name: string;
+  email: string;
+  is_admin: number;
+  created_at: string;
+}
+
+// ── Auth API ──────────────────────────────────────────────────────────────────
+export async function login(email: string, password: string, remember: boolean): Promise<{ token: string; user: User }> {
+  const res = await fetch(`${BASE}/auth/login`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ email, password, remember }),
+  });
+  if (!res.ok) throw new Error(await res.text());
+  return res.json();
+}
+
+export async function setupFirstUser(data: { first_name: string; last_name: string; email: string; password: string }): Promise<{ token: string; user: User }> {
+  const res = await fetch(`${BASE}/auth/setup`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(data),
+  });
+  if (!res.ok) throw new Error(await res.text());
+  return res.json();
+}
+
+export async function getMe(): Promise<User> {
+  const res = await fetch(`${BASE}/auth/me`, { headers: authHeaders() });
+  if (!res.ok) throw new Error(await res.text());
+  return res.json();
+}
+
+// ── Users CRUD ────────────────────────────────────────────────────────────────
+export async function listUsers(): Promise<User[]> {
+  const res = await fetch(`${BASE}/users`, { headers: authHeaders() });
+  if (!res.ok) throw new Error(await res.text());
+  return res.json();
+}
+
+export async function createUser(data: {
+  first_name: string; last_name: string; email: string;
+  password?: string; is_admin?: boolean;
+}): Promise<User & { generated_password?: string }> {
+  const res = await fetch(`${BASE}/users`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", ...authHeaders() },
+    body: JSON.stringify(data),
+  });
+  if (!res.ok) throw new Error(await res.text());
+  return res.json();
+}
+
+export async function updateUser(id: string, data: Partial<{
+  first_name: string; last_name: string; email: string;
+  password: string; is_admin: boolean;
+}>): Promise<User> {
+  const res = await fetch(`${BASE}/users/${id}`, {
+    method: "PUT",
+    headers: { "Content-Type": "application/json", ...authHeaders() },
+    body: JSON.stringify(data),
+  });
+  if (!res.ok) throw new Error(await res.text());
+  return res.json();
+}
+
+export async function deleteUser(id: string): Promise<void> {
+  const res = await fetch(`${BASE}/users/${id}`, {
+    method: "DELETE", headers: authHeaders(),
+  });
+  if (!res.ok) throw new Error(await res.text());
+}
+
+export async function generatePassword(): Promise<string> {
+  const res = await fetch(`${BASE}/users/generate-password`, { headers: authHeaders() });
+  if (!res.ok) throw new Error(await res.text());
+  const data = await res.json();
+  return data.password;
+}
+
+export type AuthCheckResult = "ok" | "auth_required" | "setup_required" | "offline";
+
+/** Check if the current token is valid (or if auth is disabled on the server) */
 export async function checkAuth(): Promise<AuthCheckResult> {
   try {
-    const res = await fetch(`${BASE}/health`, { headers: authHeaders() });
-    if (res.ok) return "ok";
-    if (res.status === 401) return "auth_required";
-    return "offline"; // unexpected server error
+    // 1. Ask the server if auth is required at all
+    const statusRes = await fetch(`${BASE}/auth/status`);
+    if (!statusRes.ok) return "offline";
+    const status = await statusRes.json() as { required: boolean; setup?: boolean };
+
+    if (!status.required) return "ok";
+
+    // No users yet — show setup screen
+    if (status.setup) return "setup_required";
+
+    // 2. Auth is required — validate stored JWT
+    const token = getJwt();
+    if (!token) return "auth_required";
+
+    const meRes = await fetch(`${BASE}/auth/me`, { headers: authHeaders() });
+    if (meRes.ok) return "ok";
+
+    // JWT invalid/expired — clear it
+    setJwt("");
+    return "auth_required";
   } catch {
-    return "offline"; // backend not reachable
+    return "offline";
   }
 }
 

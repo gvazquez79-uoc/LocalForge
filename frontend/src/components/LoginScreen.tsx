@@ -1,33 +1,35 @@
 import { useState } from "react";
-import { checkAuth, setApiKey } from "../api/client";
+import { login, setJwt, setStoredUser } from "../api/client";
 
 interface LoginScreenProps {
   onSuccess: () => void;
 }
 
 export function LoginScreen({ onSuccess }: LoginScreenProps) {
-  const [key, setKey]         = useState("");
-  const [error, setError]     = useState("");
-  const [loading, setLoading] = useState(false);
+  const [email, setEmail]       = useState("");
+  const [password, setPassword] = useState("");
+  const [remember, setRemember] = useState(false);
+  const [error, setError]       = useState("");
+  const [loading, setLoading]   = useState(false);
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!key.trim()) return;
+    if (!email.trim() || !password) return;
 
     setLoading(true);
     setError("");
 
-    // Store the key temporarily and try the health check
-    setApiKey(key.trim());
-    const ok = await checkAuth();
-
-    if (ok) {
+    try {
+      const result = await login(email.trim(), password, remember);
+      setJwt(result.token, remember);
+      setStoredUser(result.user);
       onSuccess();
-    } else {
-      setApiKey(""); // clear wrong key
-      setError("Clave incorrecta. Comprueba el valor de API_KEY en tu servidor.");
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : "Error de autenticación";
+      setError(msg);
+    } finally {
+      setLoading(false);
     }
-    setLoading(false);
   };
 
   return (
@@ -40,44 +42,70 @@ export function LoginScreen({ onSuccess }: LoginScreenProps) {
           </div>
           <h1 className="text-2xl font-bold text-gray-900 dark:text-zinc-100">LocalForge</h1>
           <p className="text-sm text-gray-500 dark:text-zinc-400 text-center">
-            Introduce tu clave de acceso para continuar
+            Inicia sesión para continuar
           </p>
         </div>
 
         {/* Form */}
-        <form onSubmit={handleSubmit} className="bg-white dark:bg-zinc-900 rounded-2xl shadow-sm border border-gray-200 dark:border-zinc-800 p-6 flex flex-col gap-4">
+        <form
+          onSubmit={handleSubmit}
+          className="bg-white dark:bg-zinc-900 rounded-2xl shadow-sm border border-gray-200 dark:border-zinc-800 p-6 flex flex-col gap-4"
+        >
           <div>
             <label className="block text-sm font-medium text-gray-700 dark:text-zinc-300 mb-1.5">
-              API Key
+              Email
             </label>
             <input
-              type="password"
-              value={key}
-              onChange={e => setKey(e.target.value)}
-              placeholder="tu-clave-secreta"
+              type="email"
+              value={email}
+              onChange={e => setEmail(e.target.value)}
+              placeholder="tu@email.com"
               autoFocus
-              className="w-full px-3 py-2.5 rounded-sm border border-gray-300 dark:border-zinc-700 bg-gray-50 dark:bg-zinc-800 text-gray-900 dark:text-zinc-100 text-sm focus:outline-none focus:border-emerald-500 transition-colors"
+              autoComplete="email"
+              className="w-full px-3 py-2.5 rounded-lg border border-gray-300 dark:border-zinc-700 bg-gray-50 dark:bg-zinc-800 text-gray-900 dark:text-zinc-100 text-sm focus:outline-none focus:border-emerald-500 transition-colors"
             />
           </div>
 
+          <div>
+            <label className="block text-sm font-medium text-gray-700 dark:text-zinc-300 mb-1.5">
+              Contraseña
+            </label>
+            <input
+              type="password"
+              value={password}
+              onChange={e => setPassword(e.target.value)}
+              placeholder="••••••••"
+              autoComplete="current-password"
+              className="w-full px-3 py-2.5 rounded-lg border border-gray-300 dark:border-zinc-700 bg-gray-50 dark:bg-zinc-800 text-gray-900 dark:text-zinc-100 text-sm focus:outline-none focus:border-emerald-500 transition-colors"
+            />
+          </div>
+
+          <label className="flex items-center gap-2.5 cursor-pointer select-none">
+            <input
+              type="checkbox"
+              checked={remember}
+              onChange={e => setRemember(e.target.checked)}
+              className="w-4 h-4 rounded accent-emerald-600"
+            />
+            <span className="text-sm text-gray-600 dark:text-zinc-400">
+              Recordarme 30 días
+            </span>
+          </label>
+
           {error && (
-            <p className="text-sm text-red-600 dark:text-red-400 bg-red-50 dark:bg-red-950/40 border border-red-200 dark:border-red-800 rounded-sm px-3 py-2">
+            <p className="text-sm text-red-600 dark:text-red-400 bg-red-50 dark:bg-red-950/40 border border-red-200 dark:border-red-800 rounded-lg px-3 py-2">
               {error}
             </p>
           )}
 
           <button
             type="submit"
-            disabled={loading || !key.trim()}
-            className="w-full py-2.5 bg-emerald-600 hover:bg-emerald-500 disabled:opacity-50 disabled:cursor-not-allowed text-white text-sm font-medium rounded-sm transition-colors"
+            disabled={loading || !email.trim() || !password}
+            className="w-full py-2.5 bg-emerald-600 hover:bg-emerald-500 disabled:opacity-50 disabled:cursor-not-allowed text-white text-sm font-semibold rounded-lg transition-colors mt-1"
           >
-            {loading ? "Verificando…" : "Entrar"}
+            {loading ? "Iniciando sesión…" : "Entrar"}
           </button>
         </form>
-
-        <p className="text-xs text-center text-gray-400 dark:text-zinc-600 mt-4">
-          Configura <code className="font-mono">API_KEY</code> en el <code className="font-mono">.env</code> del servidor
-        </p>
       </div>
     </div>
   );

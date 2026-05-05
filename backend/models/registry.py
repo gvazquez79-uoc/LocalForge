@@ -66,6 +66,13 @@ def get_adapter(model_name: str | None = None, config: LocalForgeConfig | None =
                 )
             return AnthropicAdapter(model_name=name, api_key=api_key)
 
+        if model_cfg.provider == "copilot":
+            from backend.models.copilot import CopilotAdapter
+            # github_token stored in model's api_key field (set during connect flow)
+            if not api_key:
+                raise ValueError("GitHub Copilot no está conectado. Ve a Settings → GitHub Copilot.")
+            return CopilotAdapter(model_name=name, github_token=api_key)
+
         # Ollama → use native /api/chat adapter (avoids empty-response bug in /v1/chat/completions)
         if model_cfg.provider == "ollama":
             from backend.models.ollama_native import OllamaNativeAdapter
