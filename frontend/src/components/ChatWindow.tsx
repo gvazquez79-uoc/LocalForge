@@ -40,18 +40,19 @@ const TEXT_EXTENSIONS = [
 ];
 
 function isTextFile(file: File): boolean {
+  const ext = file.name.toLowerCase().split(".").pop() ?? "";
+  // Excel files must go through parseExcelToText, not readTextFile
+  if (EXCEL_EXTENSIONS.includes(ext)) return false;
   if (file.type.startsWith("text/")) return true;
   if (!file.type) return true; // .py, .ts, .go … often have no MIME
   const textAppTypes = [
     "application/json", "application/javascript", "application/typescript",
     "application/xml",  "application/yaml",       "application/toml",
     "application/x-sh", "application/x-python",   "application/x-yaml",
-    // Windows often reports CSV as Excel
-    "application/vnd.ms-excel", "application/csv", "application/x-csv",
+    "application/csv",  "application/x-csv",
   ];
   if (textAppTypes.includes(file.type)) return true;
   // Fallback: detect by extension (Windows MIME types are unreliable)
-  const ext = file.name.toLowerCase().split(".").pop() ?? "";
   return TEXT_EXTENSIONS.includes(ext);
 }
 
@@ -61,6 +62,32 @@ function isImageFile(file: File): boolean {
 
 function isPdfFile(file: File): boolean {
   return file.type === "application/pdf" || file.name.toLowerCase().endsWith(".pdf");
+}
+
+const EXCEL_EXTENSIONS = ["xlsx", "xls", "xlsm", "xlsb", "ods"];
+const EXCEL_MIME_TYPES = [
+  "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+  "application/vnd.ms-excel",
+  "application/vnd.oasis.opendocument.spreadsheet",
+];
+
+function isExcelFile(file: File): boolean {
+  const ext = file.name.toLowerCase().split(".").pop() ?? "";
+  return EXCEL_EXTENSIONS.includes(ext) || EXCEL_MIME_TYPES.includes(file.type);
+}
+
+async function parseExcelToText(file: File): Promise<string> {
+  const XLSX = await import("xlsx");
+  const buffer = await file.arrayBuffer();
+  const workbook = XLSX.read(buffer, { type: "array" });
+  const parts: string[] = [];
+  for (const sheetName of workbook.SheetNames) {
+    const sheet = workbook.Sheets[sheetName];
+    const csv = XLSX.utils.sheet_to_csv(sheet, { FS: "\t" });
+    const trimmed = csv.split("\n").filter(l => l.replace(/\t/g, "").trim()).join("\n");
+    if (trimmed) parts.push(`### Hoja: ${sheetName}\n${trimmed}`);
+  }
+  return parts.join("\n\n");
 }
 
 export function ChatWindow() {
@@ -165,6 +192,15 @@ export function ChatWindow() {
         }
         try { newBinary.push(await readBinaryFile(file)); }
         catch { errors.push(`"${file.name}" — no se pudo leer`); }
+      } else if (isExcelFile(file)) {
+        if (file.size > maxTextBytes * 10) {
+          errors.push(`"${file.name}" — demasiado grande`);
+          continue;
+        }
+        try {
+          const text = await parseExcelToText(file);
+          newText.push({ name: file.name, content: text, size: file.size, type: "excel" });
+        } catch { errors.push(`"${file.name}" — no se pudo leer el Excel`); }
       } else if (isTextFile(file)) {
         if (file.size > maxTextBytes) {
           errors.push(`"${file.name}" — demasiado grande (máx ${maxTextBytes / 1024} KB)`);

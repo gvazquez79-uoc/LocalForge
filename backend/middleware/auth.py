@@ -29,6 +29,17 @@ _PUBLIC_PATHS = {
 }
 
 
+def _cors_headers(request: Request) -> dict:
+    """Return CORS headers mirroring the request Origin (if present)."""
+    origin = request.headers.get("origin", "")
+    if not origin:
+        return {}
+    return {
+        "Access-Control-Allow-Origin": origin,
+        "Access-Control-Allow-Credentials": "true",
+    }
+
+
 async def auth_middleware(request: Request, call_next):
     # Always allow CORS preflight
     if request.method == "OPTIONS":
@@ -55,7 +66,11 @@ async def auth_middleware(request: Request, call_next):
         # Check if auth is even required (async-safe version)
         if await _is_open_mode_async():
             return await call_next(request)
-        return JSONResponse({"error": "Unauthorized", "detail": "Token requerido"}, status_code=401)
+        return JSONResponse(
+            {"error": "Unauthorized", "detail": "Token requerido"},
+            status_code=401,
+            headers=_cors_headers(request),
+        )
 
     # Try JWT first
     user_id = decode_token(provided)
@@ -69,7 +84,11 @@ async def auth_middleware(request: Request, call_next):
         request.state.user_id = None  # system/bot request
         return await call_next(request)
 
-    return JSONResponse({"error": "Unauthorized", "detail": "Token inválido"}, status_code=401)
+    return JSONResponse(
+        {"error": "Unauthorized", "detail": "Token inválido"},
+        status_code=401,
+        headers=_cors_headers(request),
+    )
 
 
 async def _is_open_mode_async() -> bool:

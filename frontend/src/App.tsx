@@ -20,8 +20,12 @@ export default function App() {
   const [retryCount, setRetryCount]     = useState(0);
   const retryTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
+  const cancelledRef = useRef(false);
+
   const verify = async (attempt = 0) => {
     const result = await checkAuth();
+    console.log("[verify] resultado:", result, "cancelado:", cancelledRef.current);
+    if (cancelledRef.current) return; // component unmounted or effect re-ran — discard
     if (result === "ok") {
       setAuthState("ok");
     } else if (result === "auth_required") {
@@ -41,8 +45,10 @@ export default function App() {
   };
 
   useEffect(() => {
+    cancelledRef.current = false;
     verify(0);
     return () => {
+      cancelledRef.current = true;
       if (retryTimer.current) clearTimeout(retryTimer.current);
     };
   }, []); // eslint-disable-line react-hooks/exhaustive-deps

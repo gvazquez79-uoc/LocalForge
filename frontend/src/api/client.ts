@@ -147,13 +147,26 @@ export async function generatePassword(): Promise<string> {
 
 export type AuthCheckResult = "ok" | "auth_required" | "setup_required" | "offline";
 
+/** fetch with an AbortController timeout so it never hangs indefinitely */
+async function fetchWithTimeout(url: string, options: RequestInit = {}, timeoutMs = 5000): Promise<Response> {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    return await fetch(url, { ...options, signal: controller.signal });
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
 /** Check if the current token is valid (or if auth is disabled on the server) */
 export async function checkAuth(): Promise<AuthCheckResult> {
   try {
     // 1. Ask the server if auth is required at all
-    const statusRes = await fetch(`${BASE}/auth/status`);
+    const statusRes = await fetchWithTimeout(`${BASE}/auth/status`);
+    console.log("[checkAuth] /auth/status →", statusRes.status);
     if (!statusRes.ok) return "offline";
     const status = await statusRes.json() as { required: boolean; setup?: boolean };
+    console.log("[checkAuth] status =", status);
 
     if (!status.required) return "ok";
 
@@ -162,15 +175,18 @@ export async function checkAuth(): Promise<AuthCheckResult> {
 
     // 2. Auth is required — validate stored JWT
     const token = getJwt();
+    console.log("[checkAuth] token presente =", !!token);
     if (!token) return "auth_required";
 
-    const meRes = await fetch(`${BASE}/auth/me`, { headers: authHeaders() });
+    const meRes = await fetchWithTimeout(`${BASE}/auth/me`, { headers: authHeaders() });
+    console.log("[checkAuth] /auth/me →", meRes.status);
     if (meRes.ok) return "ok";
 
     // JWT invalid/expired — clear it
     setJwt("");
     return "auth_required";
-  } catch {
+  } catch (err) {
+    console.error("[checkAuth] excepción:", err);
     return "offline";
   }
 }
