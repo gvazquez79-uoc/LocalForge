@@ -118,6 +118,7 @@ def _openai_tools_to_ollama(tools: list[dict]) -> list[dict]:
 class OllamaNativeAdapter(BaseModelAdapter):
     def __init__(self, model_name: str, base_url: str = "http://localhost:11434"):
         self.model_name = model_name
+        self.temperature: float = 0.3
         # Normalise: strip trailing /v1 or /api if user added it
         host = base_url.rstrip("/")
         if host.endswith("/v1"):
@@ -143,10 +144,23 @@ class OllamaNativeAdapter(BaseModelAdapter):
         ollama_messages = _convert_messages_to_ollama(messages, system)
         ollama_tools = _openai_tools_to_ollama(tools) if tools else []
 
+        # Ollama defaults to num_ctx=2048, which silently truncates the (large)
+        # system prompt + project tree + history and breaks tool use. Raise it.
+        try:
+            from backend.config import get_config
+            _num_ctx = get_config().agent.ollama_num_ctx
+        except Exception:
+            _num_ctx = 8192
+        options = {
+            "num_ctx": _num_ctx,
+            "temperature": getattr(self, "temperature", 0.3),
+        }
+
         kwargs: dict = {
             "model": self.model_name,
             "messages": ollama_messages,
             "stream": True,
+            "options": options,
         }
         logger.info(f"Calling ollama with model={self.model_name!r} tools={len(ollama_tools)}")
         if ollama_tools:
@@ -192,6 +206,9 @@ class OllamaNativeAdapter(BaseModelAdapter):
             # Retry without tools — gemma3 and others return 400 "does not support tools"
             if ollama_tools:
                 logger.info("Retrying without tools...")
+                # Discard any partial text already streamed before the failure so
+                # the UI doesn't show duplicated content after the retry.
+                yield StreamEvent(type="clear_content", data={})
                 kwargs.pop("tools", None)
                 try:
                     async for chunk in await client.chat(**kwargs):

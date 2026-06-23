@@ -132,6 +132,10 @@ class OpenAICompatAdapter(BaseModelAdapter):
             "stream":      True,
             "stream_options": {"include_usage": True},
             "temperature": self.temperature,
+            # Without an explicit cap some local OpenAI-compatible servers
+            # (llama.cpp, LM Studio, vLLM) default to a very small completion
+            # length and truncate responses / tool-call JSON.
+            "max_tokens":  getattr(self, "max_tokens", 4096),
         }
         if tools:
             kwargs["tools"] = tools
@@ -140,12 +144,21 @@ class OpenAICompatAdapter(BaseModelAdapter):
             tool_calls_acc: dict[int, dict] = {}
             emitted_done = False
 
-            # If the model doesn't support tools, retry once without them
+            # Retry once without features the endpoint may not support:
+            #   - "does not support tools" → drop tools
+            #   - rejected stream_options  → drop stream_options
             try:
                 stream = await client.chat.completions.create(**kwargs)
             except Exception as e:
-                if "does not support tools" in str(e).lower() and "tools" in kwargs:
+                emsg = str(e).lower()
+                retried = False
+                if "does not support tools" in emsg and "tools" in kwargs:
                     kwargs.pop("tools")
+                    retried = True
+                if "stream_options" in emsg:
+                    kwargs.pop("stream_options", None)
+                    retried = True
+                if retried:
                     stream = await client.chat.completions.create(**kwargs)
                 else:
                     raise
@@ -194,6 +207,14 @@ class OpenAICompatAdapter(BaseModelAdapter):
                     emitted_done = True
 
                 elif choice.finish_reason in ("stop", "length", "end_turn"):
+                    if choice.finish_reason == "length":
+                        # Output hit max_tokens — the response (or a tool-call
+                        # JSON) may be truncated. Warn instead of silently
+                        # treating it as a clean completion.
+                        yield StreamEvent(type="warning", data={
+                            "message": "⚠️ Respuesta truncada por límite de tokens (max_tokens). "
+                                       "Puede estar incompleta.",
+                        })
                     for tc in tool_calls_acc.values():
                         try:
                             tool_input = json.loads(tc["arguments"]) if tc["arguments"] else {}

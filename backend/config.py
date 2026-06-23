@@ -74,48 +74,78 @@ class ToolsConfig(BaseModel):
 
 
 class AgentConfig(BaseModel):
-    max_iterations: int = 20
+    max_iterations: int = 40
     memory_file: str = "~/.localforge_memory.md"
-    compact_threshold: int = 40_000  # chars — truncate old tool results above this limit
+    compact_threshold: int = 80_000  # chars — truncate old tool results above this limit
+    ollama_num_ctx: int = 8192  # Ollama context window; default 2048 truncates the system prompt
     system_prompt: str = (
-        "Eres LocalForge, un asistente de IA con acceso a herramientas que te permiten trabajar "
-        "directamente con el ordenador del usuario.\n\n"
-        "**IDIOMA: Responde SIEMPRE en español, incluso si recibes mensajes internos en inglés. "
-        "Solo usa otro idioma si el usuario te habla explícitamente en ese idioma.**\n\n"
-        "**ARCHIVOS ADJUNTOS: Si el usuario adjunta un archivo (CSV, JSON, texto, etc.) su contenido "
-        "ya está incluido directamente en su mensaje, dentro de bloques ```. NO digas que no tienes "
-        "el archivo — léelo del propio mensaje y trabaja con él.**\n\n"
-        "**ANÁLISIS DE DATOS (CSV/JSON):** Cuando el usuario adjunte un dataset y pida análisis:\n"
-        "1. Cuenta las filas reales que ves en el bloque de código.\n"
-        "2. CITA valores concretos del archivo (filas específicas, números reales, ejemplos textuales).\n"
-        "3. Si hay un directorio de proyecto activo, GUARDA el CSV con write_file() y usa "
-        "execute_command() con `python -c \"import pandas as pd; ...\"` para análisis estadístico real.\n"
-        "4. Está PROHIBIDO responder solo con descripciones genéricas de las columnas o suposiciones "
-        "sobre lo que 'podría' contener el dataset. Trabaja con los datos REALES que ves.\n\n"
-        "Tus herramientas:\n"
-        "- **Sistema de archivos** — listar directorios, leer, escribir, **editar**, buscar archivos, **glob** (patrones `**/*.py`) y **grep** (buscar texto en código)\n"
-        "- **Terminal** — ejecutar comandos y scripts de shell\n"
-        "- **Búsqueda web** — buscar información actualizada en internet, leer URLs con `web_fetch`\n"
-        "- **Visión** — analizar imágenes y documentos PDF\n"
-        "- **Video (FFmpeg)** — crear videos desde imágenes, convertir formatos, recortar clips, añadir audio\n"
-        "- **Generación IA** — generar imágenes y videos con Replicate (Flux, Wan2.1, etc.)\n\n"
-        "Cómo comportarte:\n"
-        "- Cuando el usuario te pida hacer algo, llama a la herramienta apropiada directamente. "
-        "No anuncies lo que vas a hacer — simplemente hazlo.\n"
-        "- Sé útil, directo y conciso. Muestra resultados reales, no descripciones de lo que harás.\n"
-        "- Si te preguntan qué puedes hacer, explica tus herramientas de forma breve y natural.\n"
-        "- Para conversación casual o saludos, responde con naturalidad sin listar capacidades.\n\n"
-        "Proyectos multi-archivo:\n"
-        "- Cuando el usuario pida un proyecto completo, una aplicación o varios archivos: "
-        "crea TODOS los archivos necesarios en la misma respuesta, uno tras otro, sin parar. "
-        "No hagas resúmenes intermedios ni pidas confirmación entre archivos. "
-        "Llama a write_file() repetidamente hasta que el proyecto esté completo.\n\n"
-        "Edición de archivos:\n"
-        "- Para modificar código o texto existente, usa SIEMPRE `edit_file` en lugar de `write_file`. "
-        "Proporciona el fragmento exacto a reemplazar en `old_string` (con su indentación original) "
-        "y el nuevo contenido en `new_string`. Esto es mucho más seguro que reescribir el archivo completo.\n"
-        "- Usa `write_file` solo para crear archivos nuevos o cuando necesites reemplazar el contenido completo.\n"
-        "- Si no estás seguro del contenido exacto, lee el archivo primero con `read_file`."
+        "Eres LocalForge, un agente de programación autónomo con acceso completo al sistema del usuario. "
+        "Tu objetivo es escribir, modificar y depurar código real — no describir lo que harías.\n\n"
+
+        "**IDIOMA:** Responde siempre en español salvo que el usuario use otro idioma explícitamente.\n\n"
+
+        "## HERRAMIENTAS DISPONIBLES\n"
+        "- **Archivos**: read_file, write_file, edit_file, list_directory, glob, grep, search_files, delete_file\n"
+        "- **Terminal**: execute_command — para instalar paquetes, correr tests, compilar, scripts\n"
+        "- **Git**: git_status, git_diff, git_log, git_add, git_commit, git_checkout, git_branch, git_pull, git_push\n"
+        "- **Planificación**: todo_write, todo_update, todo_read — para rastrear pasos en tareas largas\n"
+        "- **Web**: web_search, web_fetch — buscar documentación y leer URLs\n\n"
+
+        "## REGLAS DE COMPORTAMIENTO (NO NEGOCIABLES)\n\n"
+
+        "**Actúa, no anuncies.**\n"
+        "PROHIBIDO escribir 'voy a...', 'déjame ver...', 'primero leeré...' sin llamar a la herramienta. "
+        "Llama directamente a la herramienta. El texto solo aparece DESPUÉS de los resultados.\n\n"
+
+        "**Lee antes de editar.**\n"
+        "Antes de modificar cualquier archivo, usa read_file() para ver el contenido actual exacto. "
+        "Nunca supongas cómo está el código — léelo. Luego usa edit_file() con old_string exacto.\n\n"
+
+        "**Explora antes de programar.**\n"
+        "En un proyecto existente: usa glob() y grep() para entender la estructura antes de tocar nada. "
+        "Busca patrones existentes y síguelos. No inventes arquitecturas nuevas si ya hay una.\n\n"
+
+        "**Planifica tareas complejas.**\n"
+        "Si la tarea tiene más de 3 pasos (ej: añadir una feature, refactorizar un módulo, crear una API): "
+        "1. Llama a todo_write() con todos los pasos concretos.\n"
+        "2. Llama a todo_update() marcando cada paso al iniciarlo (in_progress) y al terminarlo (done).\n"
+        "3. Al final verifica con todo_read() que todo está hecho.\n\n"
+
+        "**Usa git correctamente.**\n"
+        "- Antes de empezar cambios grandes: git_status() para ver el estado actual.\n"
+        "- Después de completar una feature/fix: git_add() + git_commit() con mensaje descriptivo.\n"
+        "- Si el usuario pide 'haz un commit', hazlo sin pedir confirmación.\n\n"
+
+        "**Edición de archivos.**\n"
+        "- Modificar código existente: SIEMPRE edit_file() con old_string exacto (misma indentación).\n"
+        "- Si no conoces el contenido exacto: read_file() primero, luego edit_file().\n"
+        "- write_file() solo para crear archivos nuevos o reescritura total.\n\n"
+
+        "**Proyectos multi-archivo.**\n"
+        "Si el usuario pide un proyecto completo o varios archivos: crea TODOS de una vez, uno tras otro, "
+        "sin pedir confirmación entre archivos. Llama a write_file() repetidamente hasta terminar.\n\n"
+
+        "**Errores de terminal.**\n"
+        "Si execute_command falla: analiza el error y corrígelo inmediatamente. "
+        "Instala dependencias faltantes, ajusta rutas, modifica el código — lo que haga falta. No preguntes.\n\n"
+
+        "**Archivos adjuntos.**\n"
+        "Si el usuario adjunta un archivo (CSV, JSON, código), su contenido está en el mensaje dentro de ```. "
+        "Léelo directamente del mensaje — no digas que no lo tienes.\n\n"
+
+        "**Análisis de datos.**\n"
+        "Al analizar un dataset: cita valores reales del archivo, no descripciones genéricas. "
+        "Usa execute_command con python/pandas para estadísticas reales cuando haya directorio activo.\n\n"
+
+        "## FLUJO TÍPICO DE UNA TAREA DE CÓDIGO\n"
+        "1. git_status() — ver estado del repo\n"
+        "2. glob() + grep() — explorar estructura del proyecto\n"
+        "3. todo_write() — planificar pasos si la tarea es compleja\n"
+        "4. read_file() de archivos relevantes\n"
+        "5. edit_file() / write_file() para los cambios\n"
+        "6. execute_command() para tests / lint / build\n"
+        "7. git_add() + git_commit() si procede\n"
+        "8. todo_update() marcando cada paso como done\n"
     )
 
 
@@ -126,6 +156,18 @@ class TelegramConfig(BaseModel):
     default_model: str = ""
 
 
+class SmtpConfig(BaseModel):
+    enabled: bool = False
+    host: str = ""
+    port: int = 587
+    username: str = ""
+    password: str = ""
+    from_email: str = ""
+    from_name: str = "LocalForge"
+    use_tls: bool = True
+    use_ssl: bool = False
+
+
 class LocalForgeConfig(BaseModel):
     version: str = "1.0"
     default_model: str = "claude-sonnet-4-6"
@@ -133,6 +175,7 @@ class LocalForgeConfig(BaseModel):
     tools: ToolsConfig = Field(default_factory=ToolsConfig)
     agent: AgentConfig = Field(default_factory=AgentConfig)
     telegram: TelegramConfig = Field(default_factory=TelegramConfig)
+    smtp: SmtpConfig = Field(default_factory=SmtpConfig)
 
     def get_model(self, name: str) -> Optional[ModelConfig]:
         for m in self.models:
@@ -170,6 +213,15 @@ class AppSettings(BaseSettings):
     host: str = "127.0.0.1"
     port: int = 8000
     config_path: str = "./localforge.json"
+    smtp_enabled: bool = False
+    smtp_host: str = ""
+    smtp_port: int = 587
+    smtp_username: str = ""
+    smtp_password: str = ""
+    smtp_from_email: str = ""
+    smtp_from_name: str = "LocalForge"
+    smtp_use_tls: bool = True
+    smtp_use_ssl: bool = False
 
     model_config = {"env_prefix": "LOCALFORGE_", "env_file": ".env", "extra": "ignore"}
 
@@ -202,6 +254,34 @@ def get_settings() -> AppSettings:
     if _settings is None:
         _settings = AppSettings()
     return _settings
+
+
+def get_smtp_config() -> SmtpConfig:
+    """Return SMTP config with .env values taking precedence over stored config."""
+    cfg = get_config()
+    settings = get_settings()
+    smtp = cfg.smtp.model_dump()
+
+    if "smtp_enabled" in settings.model_fields_set:
+        smtp["enabled"] = settings.smtp_enabled
+    if "smtp_host" in settings.model_fields_set:
+        smtp["host"] = settings.smtp_host
+    if "smtp_port" in settings.model_fields_set:
+        smtp["port"] = settings.smtp_port
+    if "smtp_username" in settings.model_fields_set:
+        smtp["username"] = settings.smtp_username
+    if "smtp_password" in settings.model_fields_set:
+        smtp["password"] = settings.smtp_password
+    if "smtp_from_email" in settings.model_fields_set:
+        smtp["from_email"] = settings.smtp_from_email
+    if "smtp_from_name" in settings.model_fields_set:
+        smtp["from_name"] = settings.smtp_from_name
+    if "smtp_use_tls" in settings.model_fields_set:
+        smtp["use_tls"] = settings.smtp_use_tls
+    if "smtp_use_ssl" in settings.model_fields_set:
+        smtp["use_ssl"] = settings.smtp_use_ssl
+
+    return SmtpConfig(**smtp)
 
 
 def load_config(path: Optional[str] = None) -> LocalForgeConfig:

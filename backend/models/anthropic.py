@@ -118,22 +118,39 @@ class AnthropicAdapter(BaseModelAdapter):
 
 
 def _to_anthropic_messages(messages: list[dict]) -> list[dict]:
-    """Convert internal message format to Anthropic API format."""
+    """Convert internal message format to Anthropic API format.
+
+    Anthropic requires that ALL tool_result blocks answering a single
+    assistant turn live in ONE user message, and that roles strictly
+    alternate. When the model emits several tool_use blocks in parallel,
+    the loop appends one {"role":"tool"} message per result; here we merge
+    consecutive tool results into a single user message to satisfy the API.
+    """
     result = []
     for msg in messages:
         role = msg["role"]
         content = msg["content"]
 
         if role == "tool":
-            # Tool result — becomes a user message with tool_result blocks
-            result.append({
-                "role": "user",
-                "content": [{
-                    "type": "tool_result",
-                    "tool_use_id": msg.get("tool_use_id", ""),
-                    "content": str(content),
-                }],
-            })
+            tool_result_block = {
+                "type": "tool_result",
+                "tool_use_id": msg.get("tool_use_id", msg.get("tool_call_id", "")),
+                "content": str(content),
+            }
+            # Merge into the previous user message if it only holds tool_result
+            # blocks (i.e. the immediately preceding entries were tool results too).
+            if (
+                result
+                and result[-1]["role"] == "user"
+                and isinstance(result[-1]["content"], list)
+                and all(
+                    isinstance(b, dict) and b.get("type") == "tool_result"
+                    for b in result[-1]["content"]
+                )
+            ):
+                result[-1]["content"].append(tool_result_block)
+            else:
+                result.append({"role": "user", "content": [tool_result_block]})
         elif isinstance(content, list):
             result.append({"role": role, "content": content})
         else:

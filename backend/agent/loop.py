@@ -42,8 +42,8 @@ def _messages_char_count(messages: list[dict]) -> int:
 
 def _truncate_old_tool_results(
     messages: list[dict],
-    keep_recent: int = 8,
-    max_old_result_chars: int = 300,
+    keep_recent: int = 12,
+    max_old_result_chars: int = 3000,
 ) -> tuple[list[dict], int]:
     """
     Truncate tool result content in old messages to reduce context size.
@@ -166,6 +166,13 @@ def get_enabled_tools() -> list[BaseTool]:
         from backend.tools.replicate_tools import REPLICATE_TOOLS
         tools.extend(REPLICATE_TOOLS)
 
+    # Git and Todo tools are always available
+    from backend.tools.git_tools import GIT_TOOLS
+    tools.extend(GIT_TOOLS)
+
+    from backend.tools.todo_tool import TODO_TOOLS
+    tools.extend(TODO_TOOLS)
+
     return tools
 
 
@@ -235,6 +242,30 @@ def _extract_json_object(text: str, start: int) -> str | None:
     return None
 
 
+def _coerce_param_value(raw: str):
+    """XML <parameter> values arrive as plain strings, but many tools expect
+    int/float/bool/list/dict (e.g. todo_update.task_number, git_log.n). Try to
+    parse the value as JSON; fall back to the raw string when it isn't valid JSON
+    (so paths, commands and free text are preserved untouched)."""
+    if raw == "":
+        return raw
+    low = raw.lower()
+    if low == "true":
+        return True
+    if low == "false":
+        return False
+    if low in ("null", "none"):
+        return None
+    # Only attempt JSON parsing for values that look numeric or structured —
+    # avoids turning a bareword path/identifier into something unexpected.
+    if raw[0] in "-0123456789[{\"" :
+        try:
+            return json.loads(raw)
+        except (json.JSONDecodeError, ValueError):
+            pass
+    return raw
+
+
 def _parse_inline_tool_calls(text: str) -> list[dict]:
     """Extract tool calls embedded as text and return them in the same dict
     format as the adapter's 'tool_call' events: {id, name, input}."""
@@ -276,7 +307,7 @@ def _parse_inline_tool_calls(text: str) -> list[dict]:
         for p_match in _PARAM_TAG.finditer(block):
             param_name = p_match.group(1)
             param_value = p_match.group(2).strip()
-            args[param_name] = param_value
+            args[param_name] = _coerce_param_value(param_value)
         if not args and not end_tag:
             # Incomplete stream — skip to avoid phantom calls
             continue
@@ -371,15 +402,10 @@ _HALLUCINATION_PATTERNS = [
     "posibles insights que se podrían",
     "posibles análisis que se podrían",
     "lo que podría contener el dataset",
-    # False completion claims — model says "done" without calling any tool (ES)
-    "listo.",
-    "listo!",
-    "¡listo!",
-    "listo, ahora",
-    "listo. ahora",
-    "ya está.",
-    "ya está!",
-    "¡ya está!",
+    # False completion claims — model says "done" without calling any tool (ES).
+    # NOTE: bare "listo."/"ya está." were removed — too ambiguous, they fire on
+    # legitimate conversational replies. We keep only phrases that clearly claim
+    # a concrete action was performed.
     "ya lo he añadido",
     "ya lo he implementado",
     "ya lo he creado",
@@ -396,19 +422,12 @@ _HALLUCINATION_PATTERNS = [
     "he modificado el",
     "he actualizado el",
     "he corregido el",
-    "queda así:",
-    "quedaría así:",
-    "el código queda",
     "déjame hacerlo ahora",
     "dejame hacerlo ahora",
     "voy a añadirlo ahora",
     "lo añado ahora",
     "lo implemento ahora",
-    # False completion claims (EN)
-    "done.",
-    "done!",
-    "all done",
-    "it's done",
+    # False completion claims (EN). Bare "done."/"all done" removed (ambiguous).
     "i've added",
     "i've implemented",
     "i've created",
@@ -418,10 +437,6 @@ _HALLUCINATION_PATTERNS = [
     "i have implemented",
     "i have created",
     "i have updated",
-    "here's the updated",
-    "here is the updated",
-    "here's the modified",
-    "the code now looks",
     "let me do it now",
     # "Let me..." announcements without tool call (ES)
     "déjame ver",
@@ -567,6 +582,66 @@ _HALLUCINATION_PATTERNS = [
     "unfortunately i cannot access",
     "sorry, i cannot access",
     "sorry, i don't have",
+    # Asking user to provide code/files instead of reading them with tools (ES)
+    "¿podrías proporcionar",
+    "podrías proporcionar",
+    "¿puedes proporcionar",
+    "puedes proporcionar",
+    "¿podrías compartir",
+    "podrías compartir",
+    "¿puedes compartir",
+    "comparte el código",
+    "comparte la ruta",
+    "proporcionar un fragmento",
+    "proporciona el código",
+    "comparte el fragmento",
+    "pega el código",
+    "pega el fragmento",
+    "¿podrías mostrarme el código",
+    "¿puedes mostrarme el código",
+    "muéstrame el código",
+    "muéstrame el archivo",
+    "necesito ver el código",
+    "necesitaría ver el código",
+    "necesito que compartas",
+    "necesito que me muestres",
+    "para poder analizar",
+    "para poder ayudarte necesito",
+    "si puedes compartir",
+    "si me compartes",
+    "si me proporcionas",
+    "si me muestras el código",
+    "si me pegas",
+    "si compartes",
+    # Asking user to provide code/files instead of reading them with tools (EN)
+    "could you provide",
+    "could you share",
+    "could you show me",
+    "can you provide",
+    "can you share the code",
+    "can you paste",
+    "please share the code",
+    "please provide the code",
+    "please paste",
+    "please show me the code",
+    "i need to see the code",
+    "i would need to see",
+    "i'd need to see",
+    "share the code",
+    "share the file",
+    "paste the code",
+    "show me the code",
+    "show me the file",
+    "provide the code",
+    "provide a snippet",
+    "provide the snippet",
+    "if you share",
+    "if you provide",
+    "if you paste",
+    "in order to analyze",
+    "in order to help you",
+    "to help you i need",
+    "to analyze i need",
 ]
 
 
@@ -799,24 +874,38 @@ async def run_agent(
     write_calls_this_run: int = 0
     write_calls_last_iter: int = 0
 
-    # Truncation threshold — configurable via Settings > Agent > compact_threshold
+    # Compaction threshold — configurable via Settings > Agent > compact_threshold
     COMPACT_THRESHOLD = get_config().agent.compact_threshold
 
     import logging as _logging
     _loop_log = _logging.getLogger("backend.agent.loop")
 
+    # LLM-based context compressor (Hermes-style 4-phase strategy)
+    from backend.agent.compressor import ContextCompressor
+    _compressor = ContextCompressor(adapter)
+
     for iteration in range(max_iter):
         yield StreamEvent(type="iteration", data={"n": iteration + 1})
 
-        # ── Auto-truncation ────────────────────────────────────────────────
-        # When the conversation grows too large, truncate old tool results
-        # (the biggest contributors to context bloat) — no extra API call needed.
+        # ── LLM-based context compression ──────────────────────────────────
+        # Phase 1: cheap 1-liner pruning of old tool results.
+        # Phase 3: LLM summarization of the middle section when over threshold.
         char_count = _messages_char_count(working_messages)
         if char_count > COMPACT_THRESHOLD:
-            working_messages, saved = _truncate_old_tool_results(working_messages)
-            if saved > 0:
-                _loop_log.info(f"[loop] Truncated old tool results, saved {saved} chars")
-                yield StreamEvent(type="compacting", data={"saved_chars": saved})
+            _loop_log.info(f"[loop] context {char_count} chars > threshold, compressing…")
+            yield StreamEvent(type="compacting", data={"saved_chars": 0, "phase": "start"})
+            try:
+                working_messages, did_compress = await _compressor.compress(
+                    working_messages, threshold=COMPACT_THRESHOLD
+                )
+                new_chars = _messages_char_count(working_messages)
+                saved = char_count - new_chars
+                _loop_log.info(f"[loop] compression done, saved {saved} chars")
+                yield StreamEvent(type="compacting", data={"saved_chars": saved, "phase": "done"})
+            except Exception as _ce:
+                _loop_log.error(f"[loop] compression failed: {_ce}, falling back to simple truncation")
+                working_messages, saved = _truncate_old_tool_results(working_messages)
+                yield StreamEvent(type="compacting", data={"saved_chars": saved, "phase": "fallback"})
 
 
         _loop_log.info(f"[loop] iter={iteration+1} msgs={len(working_messages)}")
@@ -851,34 +940,38 @@ async def run_agent(
                 yield event
                 return
 
-        # Append assistant turn to history
-        if is_anthropic:
-            content_blocks = []
-            if assistant_text:
-                content_blocks.append({"type": "text", "text": assistant_text})
-            for tc in tool_calls:
-                content_blocks.append({
-                    "type": "tool_use",
-                    "id": tc["id"],
-                    "name": tc["name"],
-                    "input": tc["input"],
-                })
-            working_messages.append({"role": "assistant", "content": content_blocks})
-        else:
-            assistant_msg: dict = {"role": "assistant", "content": assistant_text or None}
-            if tool_calls:
-                assistant_msg["tool_calls"] = [
-                    {
+        # Append assistant turn to history.
+        # Skip entirely when the model returned neither text nor tool calls — an
+        # empty assistant message (content=[] for Anthropic, None for OpenAI) is
+        # rejected by several endpoints and breaks role alternation.
+        if assistant_text or tool_calls:
+            if is_anthropic:
+                content_blocks = []
+                if assistant_text:
+                    content_blocks.append({"type": "text", "text": assistant_text})
+                for tc in tool_calls:
+                    content_blocks.append({
+                        "type": "tool_use",
                         "id": tc["id"],
-                        "type": "function",
-                        "function": {
-                            "name": tc["name"],
-                            "arguments": json.dumps(tc["input"]),
-                        },
-                    }
-                    for tc in tool_calls
-                ]
-            working_messages.append(assistant_msg)
+                        "name": tc["name"],
+                        "input": tc["input"],
+                    })
+                working_messages.append({"role": "assistant", "content": content_blocks})
+            else:
+                assistant_msg: dict = {"role": "assistant", "content": assistant_text or None}
+                if tool_calls:
+                    assistant_msg["tool_calls"] = [
+                        {
+                            "id": tc["id"],
+                            "type": "function",
+                            "function": {
+                                "name": tc["name"],
+                                "arguments": json.dumps(tc["input"]),
+                            },
+                        }
+                        for tc in tool_calls
+                    ]
+                working_messages.append(assistant_msg)
 
         _loop_log.info(f"[loop] iter={iteration+1} tool_calls={[t['name'] for t in tool_calls]} text_len={len(assistant_text)} stop={stop_reason}")
 
@@ -927,13 +1020,17 @@ async def run_agent(
                 ):
                     hallucination_corrections += 1
                     correction = (
-                        "[SISTEMA] PROHIBIDO. Has dicho que hiciste algo ('Listo', 'Ya está', 'He añadido...') "
-                        "o has anunciado lo que ibas a hacer, pero NO has llamado a ninguna herramienta. "
-                        "Las palabras NO ejecutan código. SOLO las herramientas ejecutan acciones reales. "
-                        "LLAMA A LA HERRAMIENTA AHORA — sin texto previo, sin explicaciones, sin 'Listo'. "
-                        "Herramientas: write_file(), edit_file(), read_file(), list_directory(), "
-                        "execute_command(), web_search(), glob(), grep(). "
-                        "Responde en español. Actúa directamente."
+                        "[SISTEMA] ERROR CRÍTICO. Has pedido al usuario que te proporcione código/archivos, "
+                        "o has dicho que hiciste algo sin llamar a ninguna herramienta. "
+                        "ESTO ESTÁ PROHIBIDO. Tienes herramientas para acceder al sistema de archivos DIRECTAMENTE. "
+                        "NO necesitas que el usuario te dé nada. El directorio de proyecto ya está configurado. "
+                        "LLAMA A LA HERRAMIENTA AHORA SIN TEXTO PREVIO:\n"
+                        "- Para ver el proyecto: list_directory(path='<ruta_del_proyecto>')\n"
+                        "- Para leer un archivo: read_file(path='<ruta_completa>')\n"
+                        "- Para buscar archivos: glob(pattern='**/*.py', path='<ruta>')\n"
+                        "- Para buscar en código: grep(pattern='texto', path='<ruta>')\n"
+                        "- Para ejecutar comandos: execute_command(command='...', working_dir='<ruta>')\n"
+                        "ACTÚA DIRECTAMENTE. Sin explicaciones, sin pedir nada al usuario."
                     )
                     # Inject correction silently — no warning shown in the chat UI.
                     # Tell the frontend to discard the text streamed so far (the capability list)
@@ -1033,16 +1130,20 @@ async def run_agent(
 
             # Auto-retry on command error — if execute_command fails (exit code ≠ 0),
             # inject a correction so the model fixes the problem automatically.
-            if tool_name == "execute_command" and isinstance(result, str) and (
-                "exit code" in result and "exit code 0" not in result
-                or result.startswith("Error:")
-                or "error:" in result.lower()[:200]
-            ):
+            # The terminal tool returns "Exit code: N\n..." (or "Error: ..." for
+            # internal failures). Parse the real exit code instead of matching
+            # arbitrary substrings, which produced both misses (case mismatch) and
+            # false positives (stdout containing the word "error:").
+            _command_failed = False
+            if tool_name == "execute_command" and isinstance(result, str):
+                _exit_match = re.match(r"^Exit code:\s*(-?\d+)", result.strip())
+                if _exit_match:
+                    _command_failed = int(_exit_match.group(1)) != 0
+                elif result.startswith("Error:"):
+                    # Internal tool error (timeout, cwd not found, blocked command)
+                    _command_failed = True
+            if _command_failed:
                 _loop_log.info(f"[loop] Command failed, injecting auto-retry correction")
-                # We'll append this after the tool result message below
-                _command_failed = True
-            else:
-                _command_failed = False
 
             if is_anthropic:
                 working_messages.append({
