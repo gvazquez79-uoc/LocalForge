@@ -26,6 +26,9 @@ _PUBLIC_PATHS = {
     "/api/auth/login",
     "/api/auth/status",
     "/api/auth/setup",
+    "/api/auth/totp/verify",
+    "/api/auth/password-reset/request",
+    "/api/auth/password-reset/confirm",
 }
 
 

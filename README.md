@@ -140,6 +140,17 @@ Create `.env` in the project root:
 # Optional — leave empty to disable auth (open dev mode)
 API_KEY=your-secret-key
 
+# SMTP para "He olvidado mi contraseña"
+LOCALFORGE_SMTP_ENABLED=true
+LOCALFORGE_SMTP_HOST=smtp.tudominio.com
+LOCALFORGE_SMTP_PORT=587
+LOCALFORGE_SMTP_USERNAME=usuario
+LOCALFORGE_SMTP_PASSWORD=tu_password
+LOCALFORGE_SMTP_FROM_EMAIL=no-reply@tudominio.com
+LOCALFORGE_SMTP_FROM_NAME=LocalForge
+LOCALFORGE_SMTP_USE_TLS=true
+LOCALFORGE_SMTP_USE_SSL=false
+
 # Optional — use MySQL instead of SQLite
 # DATABASE_URL=mysql://user:pass@localhost:3306/localforge
 
@@ -148,7 +159,7 @@ API_KEY=your-secret-key
 # LOCALFORGE_PORT=8000
 ```
 
-Provider API keys (Anthropic, Groq, OpenRouter…) are configured in **Settings → Providers** and stored in the database. Alternatively set them as environment variables (`ANTHROPIC_API_KEY`, `GROQ_API_KEY`, etc.) and reference them in the provider's `api_key_env` field.
+Provider API keys (Anthropic, Groq, OpenRouter…) are configured in **Settings → Providers** and stored in the database. Alternatively set them as environment variables (`ANTHROPIC_API_KEY`, `GROQ_API_KEY`, etc.) and reference them in the provider's `api_key_env` field. Para SMTP, usa `.env` si no quieres guardar credenciales en la configuración.
 
 ### 3. Run
 

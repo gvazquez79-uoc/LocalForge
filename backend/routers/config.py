@@ -11,7 +11,7 @@ import httpx
 from fastapi import APIRouter
 from pydantic import BaseModel
 
-from backend.config import get_config, save_config, save_config_to_db, ToolsConfig, AgentConfig, TelegramConfig
+from backend.config import get_config, get_smtp_config, save_config, save_config_to_db, ToolsConfig, AgentConfig, TelegramConfig, SmtpConfig
 
 router = APIRouter(prefix="/config", tags=["config"])
 
@@ -20,6 +20,7 @@ class UpdateConfigRequest(BaseModel):
     tools: Optional[dict[str, Any]] = None
     agent: Optional[dict[str, Any]] = None
     telegram: Optional[dict[str, Any]] = None
+    smtp: Optional[dict[str, Any]] = None
     default_model: Optional[str] = None
 
 
@@ -56,6 +57,7 @@ async def _discover_ollama_models(base_url: str) -> list[dict]:
 @router.get("")
 async def read_config():
     cfg = get_config()
+    smtp = get_smtp_config()
     safe_models = []
     for m in cfg.models:
         safe_models.append({
@@ -76,6 +78,17 @@ async def read_config():
             "bot_token": "***" if cfg.telegram.bot_token else "",
             "allowed_user_ids": cfg.telegram.allowed_user_ids,
             "default_model": cfg.telegram.default_model,
+        },
+        "smtp": {
+            "enabled": smtp.enabled,
+            "host": smtp.host,
+            "port": smtp.port,
+            "username": smtp.username,
+            "password": "***" if smtp.password else "",
+            "from_email": smtp.from_email,
+            "from_name": smtp.from_name,
+            "use_tls": smtp.use_tls,
+            "use_ssl": smtp.use_ssl,
         },
     }
 
@@ -156,6 +169,15 @@ async def update_config(body: UpdateConfigRequest):
         if "default_model" in body.telegram:
             current["default_model"] = body.telegram["default_model"]
         cfg.telegram = TelegramConfig(**current)
+
+    if body.smtp is not None:
+        current = cfg.smtp.model_dump()
+        for key in ("enabled", "host", "port", "username", "from_email", "from_name", "use_tls", "use_ssl"):
+            if key in body.smtp:
+                current[key] = body.smtp[key]
+        if "password" in body.smtp and body.smtp["password"] and body.smtp["password"] != "***":
+            current["password"] = body.smtp["password"]
+        cfg.smtp = SmtpConfig(**current)
 
     if body.default_model is not None:
         cfg.default_model = body.default_model

@@ -17,6 +17,7 @@ export default function App() {
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [usersOpen, setUsersOpen]       = useState(false);
   const [authState, setAuthState]       = useState<AuthState>("checking");
+  const [resetToken, setResetToken]     = useState<string | null>(() => new URLSearchParams(window.location.search).get("reset_token"));
   const [retryCount, setRetryCount]     = useState(0);
   const retryTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
@@ -99,7 +100,16 @@ export default function App() {
   }
 
   if (authState === "required") {
-    return <LoginScreen onSuccess={() => setAuthState("ok")} />;
+    return (
+      <LoginScreen
+        onSuccess={() => setAuthState("ok")}
+        resetToken={resetToken}
+        onResetDone={() => {
+          window.history.replaceState({}, "", window.location.pathname);
+          setResetToken(null);
+        }}
+      />
+    );
   }
 
   if (usersOpen) {

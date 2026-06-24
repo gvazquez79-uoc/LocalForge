@@ -61,6 +61,17 @@ function authHeaders(): Record<string, string> {
   return token ? { "Authorization": `Bearer ${token}` } : {};
 }
 
+async function readErrorMessage(res: Response): Promise<string> {
+  const text = await res.text();
+  if (!text) return `HTTP ${res.status}`;
+  try {
+    const data = JSON.parse(text) as { detail?: string; error?: string; message?: string };
+    return data.detail || data.error || data.message || text;
+  } catch {
+    return text;
+  }
+}
+
 // ── User types ────────────────────────────────────────────────────────────────
 export interface User {
   id: string;
@@ -69,16 +80,44 @@ export interface User {
   email: string;
   is_admin: number;
   created_at: string;
+  totp_enabled?: number;
 }
 
 // ── Auth API ──────────────────────────────────────────────────────────────────
-export async function login(email: string, password: string, remember: boolean): Promise<{ token: string; user: User }> {
+export interface LoginResponse {
+  token?: string;
+  user?: User;
+  totp_required?: boolean;
+  temp_token?: string;
+}
+
+export async function login(email: string, password: string, remember: boolean): Promise<LoginResponse> {
   const res = await fetch(`${BASE}/auth/login`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ email, password, remember }),
   });
-  if (!res.ok) throw new Error(await res.text());
+  if (!res.ok) throw new Error(await readErrorMessage(res));
+  return res.json();
+}
+
+export async function requestPasswordReset(email: string, reset_url_base: string): Promise<{ ok: boolean; message: string }> {
+  const res = await fetch(`${BASE}/auth/password-reset/request`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ email, reset_url_base }),
+  });
+  if (!res.ok) throw new Error(await readErrorMessage(res));
+  return res.json();
+}
+
+export async function confirmPasswordReset(token: string, password: string): Promise<{ ok: boolean; message: string }> {
+  const res = await fetch(`${BASE}/auth/password-reset/confirm`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ token, password }),
+  });
+  if (!res.ok) throw new Error(await readErrorMessage(res));
   return res.json();
 }
 
@@ -94,6 +133,48 @@ export async function setupFirstUser(data: { first_name: string; last_name: stri
 
 export async function getMe(): Promise<User> {
   const res = await fetch(`${BASE}/auth/me`, { headers: authHeaders() });
+  if (!res.ok) throw new Error(await res.text());
+  return res.json();
+}
+
+// ── 2FA / TOTP API ────────────────────────────────────────────────────────────
+
+/** Exchange a TOTP challenge token + 6-digit code for a full JWT. */
+export async function verifyTotp(temp_token: string, code: string): Promise<{ token: string; user: User }> {
+  const res = await fetch(`${BASE}/auth/totp/verify`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ temp_token, code }),
+  });
+  if (!res.ok) throw new Error(await readErrorMessage(res));
+  return res.json();
+}
+
+/** Generate a new TOTP secret and return the QR code (base64 PNG). */
+export async function setupTotp(): Promise<{ secret: string; qr_uri: string; qr_image_b64: string }> {
+  const res = await fetch(`${BASE}/auth/totp/setup`, { headers: authHeaders() });
+  if (!res.ok) throw new Error(await res.text());
+  return res.json();
+}
+
+/** Confirm the first TOTP code to activate 2FA. */
+export async function confirmTotp(code: string): Promise<{ ok: boolean; message: string }> {
+  const res = await fetch(`${BASE}/auth/totp/confirm`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", ...authHeaders() },
+    body: JSON.stringify({ code }),
+  });
+  if (!res.ok) throw new Error(await res.text());
+  return res.json();
+}
+
+/** Disable 2FA after verifying the current TOTP code. */
+export async function disableTotp(code: string): Promise<{ ok: boolean; message: string }> {
+  const res = await fetch(`${BASE}/auth/totp/disable`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", ...authHeaders() },
+    body: JSON.stringify({ code }),
+  });
   if (!res.ok) throw new Error(await res.text());
   return res.json();
 }
@@ -355,6 +436,17 @@ export interface LocalForgeConfig {
     allowed_user_ids: number[];
     default_model: string;
   };
+  smtp: {
+    enabled: boolean;
+    host: string;
+    port: number;
+    username: string;
+    password: string;
+    from_email: string;
+    from_name: string;
+    use_tls: boolean;
+    use_ssl: boolean;
+  };
 }
 
 export async function getConfig(): Promise<LocalForgeConfig> {
@@ -364,7 +456,7 @@ export async function getConfig(): Promise<LocalForgeConfig> {
 }
 
 export async function saveConfig(
-  data: Partial<Pick<LocalForgeConfig, "tools" | "agent" | "default_model" | "telegram">>
+  data: Partial<Pick<LocalForgeConfig, "tools" | "agent" | "default_model" | "telegram" | "smtp">>
 ): Promise<void> {
   const res = await fetch(`${BASE}/config`, {
     method: "PUT",

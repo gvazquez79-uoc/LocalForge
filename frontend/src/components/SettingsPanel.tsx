@@ -26,12 +26,14 @@ import {
   Image,
   Download,
   Loader,
+  Shield,
 } from "lucide-react";
 import {
   getConfig, saveConfig, restartTelegramBot,
   listDbModels, createDbModel, updateDbModel, deleteDbModel, setDefaultDbModel, testDbModel,
   listProviders, createProvider, updateProvider, deleteProvider, discoverProviderModels,
   getMemory, clearMemory, getApiKey,
+  setupTotp, confirmTotp, disableTotp, getMe,
 } from "../api/client";
 import type { LocalForgeConfig, DbModel, DbProvider, DbProviderUpdate } from "../api/client";
 import { getStoredTheme, setTheme } from "../store/theme";
@@ -71,6 +73,7 @@ export function SettingsPanel({ open, onClose }: SettingsPanelProps) {
   const [error, setError] = useState<string | null>(null);
   const [telegramStatus, setTelegramStatus] = useState<"idle" | "restarting" | "ok" | "error">("idle");
   const [tokenAlreadySet, setTokenAlreadySet] = useState(false);
+  const [smtpPasswordAlreadySet, setSmtpPasswordAlreadySet] = useState(false);
 
   // ── GitHub Copilot state ──────────────────────────────────────────────────
   const [copilotStatus, setCopilotStatus] = useState<"unknown" | "connected" | "disconnected">("unknown");
@@ -137,6 +140,74 @@ export function SettingsPanel({ open, onClose }: SettingsPanelProps) {
         }
       }
     );
+  };
+
+  // ── 2FA TOTP state ────────────────────────────────────────────────────────
+  const [totpEnabled, setTotpEnabled]           = useState<boolean | null>(null);
+  const [totpStep, setTotpStep]                 = useState<"idle" | "setup" | "confirm" | "disable">("idle");
+  const [totpQrB64, setTotpQrB64]               = useState("");
+  const [totpSecret, setTotpSecret]             = useState("");
+  const [totpCode, setTotpCode]                 = useState("");
+  const [totpMsg, setTotpMsg]                   = useState<{ ok: boolean; text: string } | null>(null);
+  const [totpLoading, setTotpLoading]           = useState(false);
+
+  const loadTotpStatus = async () => {
+    try {
+      const user = await getMe();
+      setTotpEnabled(!!(user as any).totp_enabled);
+    } catch { /* ignore */ }
+  };
+
+  const handleTotpStartSetup = async () => {
+    setTotpLoading(true);
+    setTotpMsg(null);
+    try {
+      const res = await setupTotp();
+      setTotpQrB64(res.qr_image_b64);
+      setTotpSecret(res.secret);
+      setTotpCode("");
+      setTotpStep("confirm");
+    } catch (e) {
+      setTotpMsg({ ok: false, text: String(e) });
+    } finally {
+      setTotpLoading(false);
+    }
+  };
+
+  const handleTotpConfirm = async () => {
+    if (totpCode.length !== 6) return;
+    setTotpLoading(true);
+    setTotpMsg(null);
+    try {
+      await confirmTotp(totpCode);
+      setTotpEnabled(true);
+      setTotpStep("idle");
+      setTotpCode("");
+      setTotpMsg({ ok: true, text: "Autenticación de dos factores activada correctamente." });
+    } catch (e) {
+      setTotpMsg({ ok: false, text: String(e) });
+      setTotpCode("");
+    } finally {
+      setTotpLoading(false);
+    }
+  };
+
+  const handleTotpDisable = async () => {
+    if (totpCode.length !== 6) return;
+    setTotpLoading(true);
+    setTotpMsg(null);
+    try {
+      await disableTotp(totpCode);
+      setTotpEnabled(false);
+      setTotpStep("idle");
+      setTotpCode("");
+      setTotpMsg({ ok: true, text: "Autenticación de dos factores desactivada." });
+    } catch (e) {
+      setTotpMsg({ ok: false, text: String(e) });
+      setTotpCode("");
+    } finally {
+      setTotpLoading(false);
+    }
   };
 
   // ── Providers state ───────────────────────────────────────────────────────
@@ -373,14 +444,21 @@ export function SettingsPanel({ open, onClose }: SettingsPanelProps) {
       listProviders().then(setProviders).catch(() => {});
       listDbModels().then(setDbModels).catch(() => {});
       loadCopilotStatus();
+      loadTotpStatus();
+      setTotpStep("idle");
+      setTotpMsg(null);
+      setTotpCode("");
       getConfig()
         .then((cfg) => {
           // If server masked the token with ***, show empty field so user knows to re-enter
           const masked = cfg.telegram.bot_token === "***";
+          const smtpMasked = cfg.smtp.password === "***";
           setTokenAlreadySet(masked);
+          setSmtpPasswordAlreadySet(smtpMasked);
           setConfig({
             ...cfg,
             telegram: { ...cfg.telegram, bot_token: masked ? "" : cfg.telegram.bot_token },
+            smtp: { ...cfg.smtp, password: smtpMasked ? "" : cfg.smtp.password },
           });
         })
         .catch(() => setError("Failed to load config from backend."));
@@ -497,12 +575,17 @@ export function SettingsPanel({ open, onClose }: SettingsPanelProps) {
     );
   };
 
+  const updateSmtp = (patch: Partial<LocalForgeConfig["smtp"]>) =>
+    setConfig((c) =>
+      c ? { ...c, smtp: { ...c.smtp, ...patch } } : c
+    );
+
   const handleSave = async () => {
     if (!config) return;
     setSaving(true);
     setError(null);
     try {
-      await saveConfig({ tools: config.tools, agent: config.agent, telegram: config.telegram });
+      await saveConfig({ tools: config.tools, agent: config.agent, telegram: config.telegram, smtp: config.smtp });
       setSavedOk(true);
       setTimeout(() => setSavedOk(false), 3000);
 
@@ -1269,6 +1352,89 @@ export function SettingsPanel({ open, onClose }: SettingsPanelProps) {
                 )}
               </Section>
 
+              <Section icon={<Send size={15} />} title="Correo SMTP">
+                <Toggle
+                  label="Activar envío de correos"
+                  checked={config.smtp.enabled}
+                  onChange={(v) => updateSmtp({ enabled: v })}
+                />
+                {config.smtp.enabled && (
+                  <>
+                    <div className="grid grid-cols-2 gap-3">
+                      <div className="space-y-1.5 col-span-2">
+                        <label className="text-xs font-medium text-gray-500 dark:text-zinc-400">Servidor SMTP</label>
+                        <input
+                          value={config.smtp.host}
+                          onChange={(e) => updateSmtp({ host: e.target.value })}
+                          placeholder="smtp.tudominio.com"
+                          className="w-full bg-gray-100 border border-gray-300 dark:bg-zinc-800 dark:border-zinc-700 rounded-sm px-3 py-2 text-xs text-gray-800 dark:text-zinc-200 focus:outline-none focus:border-emerald-500"
+                        />
+                      </div>
+                      <div className="space-y-1.5">
+                        <label className="text-xs font-medium text-gray-500 dark:text-zinc-400">Puerto</label>
+                        <input
+                          type="number"
+                          value={config.smtp.port}
+                          onChange={(e) => updateSmtp({ port: Number(e.target.value) || 587 })}
+                          className="w-full bg-gray-100 border border-gray-300 dark:bg-zinc-800 dark:border-zinc-700 rounded-sm px-3 py-2 text-xs text-gray-800 dark:text-zinc-200 focus:outline-none focus:border-emerald-500"
+                        />
+                      </div>
+                      <div className="space-y-1.5">
+                        <label className="text-xs font-medium text-gray-500 dark:text-zinc-400">Usuario</label>
+                        <input
+                          value={config.smtp.username}
+                          onChange={(e) => updateSmtp({ username: e.target.value })}
+                          className="w-full bg-gray-100 border border-gray-300 dark:bg-zinc-800 dark:border-zinc-700 rounded-sm px-3 py-2 text-xs text-gray-800 dark:text-zinc-200 focus:outline-none focus:border-emerald-500"
+                        />
+                      </div>
+                      <div className="space-y-1.5 col-span-2">
+                        <label className="text-xs font-medium text-gray-500 dark:text-zinc-400">Contraseña</label>
+                        <input
+                          type="password"
+                          value={config.smtp.password}
+                          onChange={(e) => updateSmtp({ password: e.target.value })}
+                          placeholder={smtpPasswordAlreadySet ? "Contraseña ya configurada; escribe otra para cambiarla" : "Contraseña SMTP"}
+                          className="w-full bg-gray-100 border border-gray-300 dark:bg-zinc-800 dark:border-zinc-700 rounded-sm px-3 py-2 text-xs text-gray-800 dark:text-zinc-200 focus:outline-none focus:border-emerald-500"
+                        />
+                      </div>
+                      <div className="space-y-1.5">
+                        <label className="text-xs font-medium text-gray-500 dark:text-zinc-400">From email</label>
+                        <input
+                          value={config.smtp.from_email}
+                          onChange={(e) => updateSmtp({ from_email: e.target.value })}
+                          placeholder="no-reply@tudominio.com"
+                          className="w-full bg-gray-100 border border-gray-300 dark:bg-zinc-800 dark:border-zinc-700 rounded-sm px-3 py-2 text-xs text-gray-800 dark:text-zinc-200 focus:outline-none focus:border-emerald-500"
+                        />
+                      </div>
+                      <div className="space-y-1.5">
+                        <label className="text-xs font-medium text-gray-500 dark:text-zinc-400">From name</label>
+                        <input
+                          value={config.smtp.from_name}
+                          onChange={(e) => updateSmtp({ from_name: e.target.value })}
+                          placeholder="LocalForge"
+                          className="w-full bg-gray-100 border border-gray-300 dark:bg-zinc-800 dark:border-zinc-700 rounded-sm px-3 py-2 text-xs text-gray-800 dark:text-zinc-200 focus:outline-none focus:border-emerald-500"
+                        />
+                      </div>
+                    </div>
+                    <div className="grid grid-cols-2 gap-3">
+                      <Toggle
+                        label="STARTTLS"
+                        checked={config.smtp.use_tls}
+                        onChange={(v) => updateSmtp({ use_tls: v })}
+                      />
+                      <Toggle
+                        label="SSL directo"
+                        checked={config.smtp.use_ssl}
+                        onChange={(v) => updateSmtp({ use_ssl: v })}
+                      />
+                    </div>
+                    <p className="text-[12px] text-gray-400 dark:text-zinc-500">
+                      Se usa para enviar el enlace de “he olvidado mi contraseña”.
+                    </p>
+                  </>
+                )}
+              </Section>
+
               {/* ── Telegram ── */}
               <Section icon={<Send size={15} />} title="Telegram">
                 <Toggle
@@ -1351,6 +1517,135 @@ export function SettingsPanel({ open, onClose }: SettingsPanelProps) {
               </Section>
             </>
           )}
+
+          {/* ── 2FA / TOTP ── (always shown, outside the config guard) */}
+          <Section icon={<Shield size={15} />} title="Autenticación de dos factores (2FA)">
+            {totpEnabled === null ? (
+              <p className="text-xs text-gray-400 dark:text-zinc-500">Cargando estado…</p>
+            ) : totpEnabled ? (
+              /* 2FA is ON — offer to disable */
+              <div className="space-y-3">
+                <div className="flex items-center gap-2">
+                  <span className="w-2 h-2 rounded-full bg-emerald-500 inline-block" />
+                  <span className="text-xs text-emerald-600 dark:text-emerald-400 font-medium">2FA activado</span>
+                </div>
+                {totpStep !== "disable" ? (
+                  <button
+                    type="button"
+                    onClick={() => { setTotpStep("disable"); setTotpCode(""); setTotpMsg(null); }}
+                    className="flex items-center gap-1.5 px-3 py-1.5 text-xs bg-gray-100 dark:bg-zinc-800 border border-gray-300 dark:border-zinc-700 rounded-sm hover:border-red-500 hover:text-red-600 dark:hover:border-red-500 dark:hover:text-red-400 transition-colors"
+                  >
+                    <Shield size={12} />
+                    Desactivar 2FA
+                  </button>
+                ) : (
+                  <div className="space-y-2">
+                    <p className="text-xs text-gray-600 dark:text-zinc-400">
+                      Introduce el código de tu aplicación autenticadora para confirmar:
+                    </p>
+                    <input
+                      type="text"
+                      inputMode="numeric"
+                      maxLength={6}
+                      value={totpCode}
+                      onChange={e => setTotpCode(e.target.value.replace(/\D/g, ""))}
+                      placeholder="000000"
+                      autoComplete="one-time-code"
+                      className="w-full bg-gray-100 border border-gray-300 dark:bg-zinc-800 dark:border-zinc-700 rounded-sm px-3 py-2 text-base text-center font-mono tracking-widest focus:outline-none focus:border-emerald-500"
+                    />
+                    <div className="flex gap-2">
+                      <button
+                        type="button"
+                        onClick={handleTotpDisable}
+                        disabled={totpLoading || totpCode.length !== 6}
+                        className="flex-1 px-3 py-1.5 text-xs bg-red-600 hover:bg-red-500 disabled:opacity-50 text-white rounded-sm transition-colors"
+                      >
+                        {totpLoading ? "Desactivando…" : "Confirmar desactivación"}
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => { setTotpStep("idle"); setTotpCode(""); setTotpMsg(null); }}
+                        className="px-3 py-1.5 text-xs bg-gray-100 dark:bg-zinc-800 border border-gray-300 dark:border-zinc-700 rounded-sm hover:border-gray-400 transition-colors"
+                      >
+                        Cancelar
+                      </button>
+                    </div>
+                  </div>
+                )}
+              </div>
+            ) : (
+              /* 2FA is OFF — offer to enable */
+              <div className="space-y-3">
+                <p className="text-xs text-gray-500 dark:text-zinc-400">
+                  Protege tu cuenta con Google Authenticator u otra app TOTP.
+                </p>
+                {totpStep !== "confirm" ? (
+                  <button
+                    type="button"
+                    onClick={handleTotpStartSetup}
+                    disabled={totpLoading}
+                    className="flex items-center gap-1.5 px-3 py-1.5 text-xs bg-emerald-600 hover:bg-emerald-500 disabled:opacity-50 text-white rounded-sm transition-colors"
+                  >
+                    <Shield size={12} />
+                    {totpLoading ? "Generando…" : "Activar 2FA"}
+                  </button>
+                ) : (
+                  <div className="space-y-3">
+                    <p className="text-xs text-gray-600 dark:text-zinc-300">
+                      1. Escanea el QR con Google Authenticator (o usa el código manual debajo).
+                    </p>
+                    {totpQrB64 && (
+                      <img
+                        src={`data:image/png;base64,${totpQrB64}`}
+                        alt="QR 2FA"
+                        className="w-40 h-40 rounded-sm border border-gray-200 dark:border-zinc-700 mx-auto"
+                      />
+                    )}
+                    {totpSecret && (
+                      <p className="text-[11px] text-center text-gray-400 dark:text-zinc-500 font-mono break-all">
+                        {totpSecret}
+                      </p>
+                    )}
+                    <p className="text-xs text-gray-600 dark:text-zinc-300">
+                      2. Introduce el código de 6 dígitos generado para confirmar:
+                    </p>
+                    <input
+                      type="text"
+                      inputMode="numeric"
+                      maxLength={6}
+                      value={totpCode}
+                      onChange={e => setTotpCode(e.target.value.replace(/\D/g, ""))}
+                      placeholder="000000"
+                      autoComplete="one-time-code"
+                      className="w-full bg-gray-100 border border-gray-300 dark:bg-zinc-800 dark:border-zinc-700 rounded-sm px-3 py-2 text-base text-center font-mono tracking-widest focus:outline-none focus:border-emerald-500"
+                    />
+                    <div className="flex gap-2">
+                      <button
+                        type="button"
+                        onClick={handleTotpConfirm}
+                        disabled={totpLoading || totpCode.length !== 6}
+                        className="flex-1 px-3 py-1.5 text-xs bg-emerald-600 hover:bg-emerald-500 disabled:opacity-50 text-white rounded-sm transition-colors"
+                      >
+                        {totpLoading ? "Activando…" : "Activar 2FA"}
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => { setTotpStep("idle"); setTotpCode(""); setTotpMsg(null); }}
+                        className="px-3 py-1.5 text-xs bg-gray-100 dark:bg-zinc-800 border border-gray-300 dark:border-zinc-700 rounded-sm hover:border-gray-400 transition-colors"
+                      >
+                        Cancelar
+                      </button>
+                    </div>
+                  </div>
+                )}
+              </div>
+            )}
+            {totpMsg && (
+              <p className={`text-xs px-3 py-2 rounded-sm border ${totpMsg.ok ? "text-emerald-700 dark:text-emerald-400 bg-emerald-50 dark:bg-emerald-950/40 border-emerald-200 dark:border-emerald-800" : "text-red-600 dark:text-red-400 bg-red-50 dark:bg-red-950/40 border-red-200 dark:border-red-800"}`}>
+                {totpMsg.text}
+              </p>
+            )}
+          </Section>
         </div>
 
         {/* Footer */}

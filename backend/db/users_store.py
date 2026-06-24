@@ -27,15 +27,26 @@ async def init_users_table() -> None:
     async with get_db() as db:
         await db.execute("""
             CREATE TABLE IF NOT EXISTS users (
-                id           VARCHAR(36) PRIMARY KEY,
-                first_name   VARCHAR(100) NOT NULL,
-                last_name    VARCHAR(100) NOT NULL DEFAULT '',
-                email        VARCHAR(255) NOT NULL UNIQUE,
+                id            VARCHAR(36) PRIMARY KEY,
+                first_name    VARCHAR(100) NOT NULL,
+                last_name     VARCHAR(100) NOT NULL DEFAULT '',
+                email         VARCHAR(255) NOT NULL UNIQUE,
                 password_hash VARCHAR(255) NOT NULL,
-                is_admin     INTEGER NOT NULL DEFAULT 0,
-                created_at   TEXT NOT NULL
+                is_admin      INTEGER NOT NULL DEFAULT 0,
+                created_at    TEXT NOT NULL,
+                totp_secret   TEXT,
+                totp_enabled  INTEGER NOT NULL DEFAULT 0
             )
         """)
+        # Migrate existing tables that lack the TOTP columns
+        try:
+            await db.execute("ALTER TABLE users ADD COLUMN totp_secret TEXT")
+        except Exception:
+            pass
+        try:
+            await db.execute("ALTER TABLE users ADD COLUMN totp_enabled INTEGER NOT NULL DEFAULT 0")
+        except Exception:
+            pass
         await db.commit()
 
 
@@ -119,7 +130,46 @@ async def update_user(
     return await get_user_by_id(user_id)
 
 
+async def update_password(user_id: str, password: str) -> None:
+    async with get_db() as db:
+        await db.execute(
+            "UPDATE users SET password_hash = ? WHERE id = ?",
+            (hash_password(password), user_id),
+        )
+        await db.commit()
+
+
 async def delete_user(user_id: str) -> None:
     async with get_db() as db:
         await db.execute("DELETE FROM users WHERE id = ?", (user_id,))
+        await db.commit()
+
+
+# ── TOTP helpers ─────────────────────────────────────────────────────────────
+
+async def set_totp_secret(user_id: str, secret: str) -> None:
+    """Store a (not-yet-confirmed) TOTP secret. totp_enabled stays 0."""
+    async with get_db() as db:
+        await db.execute(
+            "UPDATE users SET totp_secret = ? WHERE id = ?", (secret, user_id)
+        )
+        await db.commit()
+
+
+async def enable_totp(user_id: str) -> None:
+    """Mark TOTP as enabled after the user has verified the first code."""
+    async with get_db() as db:
+        await db.execute(
+            "UPDATE users SET totp_enabled = 1 WHERE id = ?", (user_id,)
+        )
+        await db.commit()
+
+
+async def disable_totp(user_id: str) -> None:
+    """Remove the TOTP secret and disable 2FA."""
+    async with get_db() as db:
+        await db.execute(
+            "UPDATE users SET totp_secret = NULL, totp_enabled = 0 WHERE id = ?",
+            (user_id,),
+        )
         await db.commit()
