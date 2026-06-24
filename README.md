@@ -468,6 +468,108 @@ On first launch, enter your LocalForge server URL (e.g. `http://192.168.1.x:8000
 
 ---
 
+## Despliegue en producción (Ubuntu + Plesk)
+
+### Requisitos
+
+- Ubuntu 24.04, Python 3.12+, Node.js 18+, Git
+- Plesk Obsidian (gestiona dominios, SSL y proxy Nginx)
+- MySQL/MariaDB (opcional; SQLite por defecto)
+
+### 1. Clonar e instalar dependencias
+
+```bash
+cd /var/www/vhosts/<tu-dominio>/httpdocs
+git clone https://github.com/gvazquez79-uoc/LocalForge.git .
+apt install python3.12-venv -y
+python3 -m venv venv
+source venv/bin/activate
+pip install -r requirements.txt
+```
+
+### 2. Build del frontend
+
+```bash
+cd frontend && npm install && npm run build && cd ..
+```
+
+### 3. Configurar `.env`
+
+```bash
+cat > .env << 'EOF'
+DATABASE_URL=mysql+aiomysql://usuario:password@localhost/nombre_db
+API_KEY=tu_clave_secreta_larga
+LOCALFORGE_HOST=127.0.0.1
+LOCALFORGE_PORT=8000
+EOF
+```
+
+- Si usas **SQLite** omite `DATABASE_URL` — se crea automáticamente.
+- `API_KEY` protege el acceso al backend; el frontend la gestiona de forma transparente.
+- Las API keys de los modelos (Anthropic, Groq, etc.) se configuran desde la interfaz en Settings → Providers.
+
+### 4. Servicio systemd
+
+```bash
+cat > /etc/systemd/system/localforge.service << 'EOF'
+[Unit]
+Description=LocalForge
+After=network.target mysql.service
+
+[Service]
+WorkingDirectory=/var/www/vhosts/<tu-dominio>/httpdocs
+ExecStart=/var/www/vhosts/<tu-dominio>/httpdocs/venv/bin/uvicorn backend.main:app --host 127.0.0.1 --port 8000 --workers 1
+Restart=always
+RestartSec=5
+User=root
+EnvironmentFile=/var/www/vhosts/<tu-dominio>/httpdocs/.env
+
+[Install]
+WantedBy=multi-user.target
+EOF
+
+systemctl daemon-reload
+systemctl enable --now localforge
+systemctl status localforge
+```
+
+### 5. Proxy en Plesk
+
+En el panel de Plesk, ve al dominio → **Apache & nginx Settings** y añade en "Additional nginx directives":
+
+```nginx
+location /api/ {
+    proxy_pass http://127.0.0.1:8000;
+    proxy_http_version 1.1;
+    proxy_set_header Upgrade $http_upgrade;
+    proxy_set_header Connection "upgrade";
+    proxy_set_header Host $host;
+    proxy_set_header X-Real-IP $remote_addr;
+    proxy_read_timeout 300s;
+    proxy_buffering off;
+}
+
+location / {
+    root /var/www/vhosts/<tu-dominio>/httpdocs/frontend/dist;
+    try_files $uri $uri/ /index.html;
+}
+```
+
+Activa **Let's Encrypt** desde Plesk para HTTPS automático.
+
+### Actualizar
+
+```bash
+cd /var/www/vhosts/<tu-dominio>/httpdocs
+git pull origin main
+source venv/bin/activate
+pip install -r requirements.txt
+cd frontend && npm install && npm run build && cd ..
+systemctl restart localforge
+```
+
+---
+
 ## License
 
 MIT
