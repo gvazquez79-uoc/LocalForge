@@ -564,9 +564,11 @@ cd /var/www/vhosts/<tu-dominio>/httpdocs
 git pull origin main
 source venv/bin/activate
 pip install -r requirements.txt
-cd frontend && npm install && npm run build && cd ..
+cd frontend && VITE_API_BASE=https://<tu-dominio>/api npm run build && cd ..
 systemctl restart localforge
 ```
+
+> **Importante:** el build del frontend siempre necesita `VITE_API_BASE` apuntando a tu dominio. Sin esa variable el frontend intentará conectar a `localhost:8000` y no funcionará en producción.
 
 ---
 
