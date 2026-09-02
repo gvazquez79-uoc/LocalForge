@@ -30,7 +30,8 @@ export interface UIMessage {
   /** Attachments shown as chips/thumbnails in the message bubble */
   attachments?: Array<{ name: string; dataUrl?: string; isPdf?: boolean; isText?: boolean }>;
   /** Token usage for this message (only available when provider supports it) */
-  usage?: { input_tokens: number; output_tokens: number };
+  usage?: { input_tokens: number; output_tokens: number;
+            cache_read_tokens?: number; cache_write_tokens?: number };
 }
 
 interface ChatState {
@@ -273,6 +274,19 @@ export const useChatStore = create<ChatState>((set, get) => ({
             };
             msgs.splice(msgs.length - 1, 0, notice);
             return { messages: msgs };
+          } else if (event.type === "verifying") {
+            // El agente ha terminado de escribir y se están ejecutando las
+            // comprobaciones del proyecto (tests, typecheck, build).
+            const attempt = (event.data as { attempt: number }).attempt;
+            const notice: UIMessage = {
+              id: `verify_${Date.now()}`,
+              role: "system",
+              content: attempt > 1
+                ? `🔍 Verificando el proyecto… (intento ${attempt})`
+                : "🔍 Verificando el proyecto…",
+            };
+            msgs.splice(msgs.length - 1, 0, notice);
+            return { messages: msgs };
           } else if (event.type === "clear_content") {
             // Model gave a bad response (capability list), correction injected silently.
             // Reset the bubble so the next iteration starts clean.
@@ -280,7 +294,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
             updated.toolCalls = [];
             updated.toolResults = {};
           } else if (event.type === "usage") {
-            updated.usage = event.data as { input_tokens: number; output_tokens: number };
+            updated.usage = event.data as UIMessage["usage"];
           } else if (event.type === "text_delta") {
             updated.content += (event.data as { text: string }).text;
           } else if (event.type === "tool_call") {

@@ -317,7 +317,7 @@ export interface ModelInfo {
 }
 
 export interface StreamEvent {
-  type: "text_delta" | "tool_call" | "tool_result" | "iteration" | "done" | "error" | "warning" | "title_updated" | "tool_confirmation_needed" | "clear_content" | "usage" | "compacting";
+  type: "text_delta" | "tool_call" | "tool_result" | "iteration" | "done" | "error" | "warning" | "title_updated" | "tool_confirmation_needed" | "clear_content" | "usage" | "compacting" | "verifying";
   data: Record<string, unknown>;
 }
 

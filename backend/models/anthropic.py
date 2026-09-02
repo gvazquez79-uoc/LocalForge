@@ -47,15 +47,31 @@ class AnthropicAdapter(BaseModelAdapter):
         # Convert messages to Anthropic format
         anthropic_messages = _to_anthropic_messages(messages)
 
+        # ── Prompt caching ────────────────────────────────────────────────
+        # An agent turn resends the same system prompt and the same tool
+        # definitions on every iteration; a 40-iteration task paid for that
+        # prefix 40 times. Marking the two stable blocks as ephemeral cache
+        # breakpoints makes every iteration after the first read them from
+        # cache at a fraction of the price, and faster.
+        # The prefix must be byte-identical across calls, so nothing volatile
+        # (timestamps, randomised ordering) may go into system or tools.
         kwargs: dict[str, Any] = {
             "model": self.model_name,
             "max_tokens": 8096,
             "temperature": self.temperature,
-            "system": system,
+            "system": [{
+                "type": "text",
+                "text": system,
+                "cache_control": {"type": "ephemeral"},
+            }] if system else system,
             "messages": anthropic_messages,
         }
         if tools:
-            kwargs["tools"] = tools
+            # Only the LAST tool carries the breakpoint: it caches everything
+            # up to and including the whole tool array.
+            cached_tools = [dict(t) for t in tools]
+            cached_tools[-1]["cache_control"] = {"type": "ephemeral"}
+            kwargs["tools"] = cached_tools
 
         logger.info(f"Sending to Anthropic: model={self.model_name} tools={len(tools)} msgs={len(messages)}")
 
@@ -88,9 +104,20 @@ class AnthropicAdapter(BaseModelAdapter):
 
                 yield StreamEvent(type="done", data={"stop_reason": final.stop_reason})
                 if final.usage:
+                    u = final.usage
+                    cache_read = getattr(u, "cache_read_input_tokens", 0) or 0
+                    cache_write = getattr(u, "cache_creation_input_tokens", 0) or 0
+                    # Surfacing the hit rate is the only way to notice that the
+                    # cache silently stopped working (any change to the prefix
+                    # invalidates it without raising an error).
+                    logger.info(
+                        "[cache] read=%s write=%s fresh=%s", cache_read, cache_write, u.input_tokens
+                    )
                     yield StreamEvent(type="usage", data={
-                        "input_tokens": final.usage.input_tokens,
-                        "output_tokens": final.usage.output_tokens,
+                        "input_tokens": u.input_tokens,
+                        "output_tokens": u.output_tokens,
+                        "cache_read_tokens": cache_read,
+                        "cache_write_tokens": cache_write,
                     })
         except anthropic.AuthenticationError as e:
             logger.error(f"AuthenticationError: {e}")
