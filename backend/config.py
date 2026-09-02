@@ -78,6 +78,20 @@ class AgentConfig(BaseModel):
     memory_file: str = "~/.localforge_memory.md"
     compact_threshold: int = 80_000  # chars — truncate old tool results above this limit
     ollama_num_ctx: int = 8192  # Ollama context window; default 2048 truncates the system prompt
+
+    # ── Bucle de verificación ────────────────────────────────────────────────
+    # Cuando el agente da una tarea por terminada y ha escrito ficheros, se
+    # ejecutan las comprobaciones que el proyecto realmente tiene (tests,
+    # typecheck, build) y, si fallan, el error vuelve al modelo para que corrija.
+    # Solo se ejecutan comandos DERIVADOS del proyecto (pytest si hay tests,
+    # npm run build si hay package.json), nunca comandos inventados.
+    verify_after_write: bool = True
+    max_verify_attempts: int = 2          # tras esto, se informa y se para
+    verify_timeout_seconds: int = 300
+
+    # Tope de gasto por run. Al superarlo el turno se cierra explicando por qué,
+    # en vez de seguir quemando tokens en silencio. 0 = sin límite.
+    max_run_tokens: int = 0
     system_prompt: str = (
         "Eres LocalForge, un agente de programación autónomo con acceso completo al sistema del usuario. "
         "Tu objetivo es escribir, modificar y depurar código real — no describir lo que harías.\n\n"
