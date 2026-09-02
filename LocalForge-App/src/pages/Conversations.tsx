@@ -22,9 +22,7 @@ export const Conversations: React.FC = () => {
   const load = async () => {
     try {
       const data = await listConversations();
-      setConversations(data.sort((a, b) =>
-        new Date(b.updated_at).getTime() - new Date(a.updated_at).getTime()
-      ));
+      setConversations(data.sort((a, b) => b.updated_at - a.updated_at));
     } catch { /* ignore */ }
     setLoading(false);
   };
@@ -51,8 +49,9 @@ export const Conversations: React.FC = () => {
     setConversations(conversations.filter(c => c.id !== id));
   };
 
-  const formatDate = (dateStr: string) => {
-    const d = new Date(dateStr);
+  // The backend stores created_at/updated_at as unix SECONDS.
+  const formatDate = (unixSeconds: number) => {
+    const d = new Date(unixSeconds * 1000);
     const now = new Date();
     const diff = now.getTime() - d.getTime();
     if (diff < 60_000) return "ahora";

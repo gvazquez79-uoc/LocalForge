@@ -5,7 +5,9 @@ import {
   IonMenuButton,
 } from "@ionic/react";
 import { sendOutline, stopCircleOutline } from "ionicons/icons";
-import { sendMessage, listModels, loadModel, saveModel } from "../api/client";
+import {
+  sendMessage, listModels, loadModel, saveModel, createConversation, approveTool,
+} from "../api/client";
 import { useAppStore } from "../store/app";
 import { MessageBubble } from "../components/MessageBubble";
 import { ModelPicker } from "../components/ModelPicker";
@@ -26,7 +28,6 @@ export const Chat: React.FC = () => {
   const addUserMessage  = useAppStore(s => s.addUserMessage);
   const startAssistant  = useAppStore(s => s.startAssistantMessage);
   const appendChunk     = useAppStore(s => s.appendChunk);
-  const clearPending    = useAppStore(s => s.clearPendingAssistant);
   const setStreaming    = useAppStore(s => s.setStreaming);
 
   // Load models once
@@ -44,7 +45,7 @@ export const Chat: React.FC = () => {
     setTimeout(() => contentRef.current?.scrollToBottom(200), 50);
   }, [messages]);
 
-  const handleSend = useCallback(() => {
+  const handleSend = useCallback(async () => {
     const text = input.trim();
     if (!text || isStreaming) return;
     setInput("");
@@ -53,33 +54,65 @@ export const Chat: React.FC = () => {
     startAssistant();
     setStreaming(true);
 
-    const history = [
-      ...messages.map(m => ({ role: m.role, content: m.content })),
-      { role: "user" as const, content: text },
-    ];
+    // Write the error into the pending assistant bubble rather than dropping it
+    // — clearing the bubble first would leave appendChunk with nowhere to write.
+    const fail = (err: string) => {
+      appendChunk(`⚠️ Error: ${err}`);
+      setStreaming(false);
+      stopRef.current = null;
+    };
+
+    // The backend streams per conversation and keeps the history itself, so we
+    // need a conversation id before sending the first message.
+    let convId = activeConvId;
+    if (!convId) {
+      try {
+        const conv = await createConversation(activeModel);
+        convId = conv.id;
+        setActiveConvId(convId);
+      } catch (e) {
+        fail(String(e instanceof Error ? e.message : e));
+        return;
+      }
+    }
+    const streamConvId = convId;
 
     stopRef.current = sendMessage(
-      history,
+      streamConvId,
+      text,
       activeModel,
-      activeConvId,
       (event) => {
-        if (event.type === "text_delta") {
-          appendChunk((event.data as any).text ?? "");
+        const data = (event.data ?? {}) as Record<string, unknown>;
+        switch (event.type) {
+          case "text_delta":
+            appendChunk(String(data.text ?? ""));
+            break;
+          case "tool_call":
+            appendChunk(`\n\n🔧 ${data.name ?? "tool"}\n`);
+            break;
+          case "tool_confirmation_needed":
+            // There is no approval UI on mobile — decline so the agent loop
+            // continues instead of blocking for its 5-minute timeout.
+            appendChunk(
+              `\n\n⚠️ La acción "${data.name ?? "?"}" requiere confirmación. ` +
+              `Rechazada automáticamente: apruébala desde la interfaz web.\n`,
+            );
+            if (data.tool_use_id) {
+              approveTool(streamConvId, String(data.tool_use_id), false).catch(() => {});
+            }
+            break;
+          case "error":
+            appendChunk(`\n\n⚠️ ${data.message ?? "Error desconocido"}\n`);
+            break;
         }
       },
-      (convId) => {
-        setStreaming(false);
-        setActiveConvId(convId);
-        stopRef.current = null;
-      },
-      (err) => {
-        clearPending();
-        addUserMessage(`⚠️ Error: ${err}`);
+      () => {
         setStreaming(false);
         stopRef.current = null;
       },
+      fail,
     );
-  }, [input, isStreaming, messages, activeModel, activeConvId]);
+  }, [input, isStreaming, activeModel, activeConvId]);
 
   const handleStop = () => {
     stopRef.current?.();

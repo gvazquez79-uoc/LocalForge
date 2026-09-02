@@ -9,14 +9,15 @@ export interface Message {
   id: string;
   role: "user" | "assistant";
   content: string;
-  timestamp: number;
+  timestamp: number;   // epoch milliseconds
 }
 
 export interface Conversation {
   id: string;
   title: string;
-  created_at: string;
-  updated_at: string;
+  model: string;
+  created_at: number;  // the backend stores unix SECONDS, not an ISO string
+  updated_at: number;
 }
 
 export interface Model {
@@ -63,6 +64,9 @@ function base(): string {
   return localStorage.getItem(KEY_URL) ?? "";
 }
 
+// The backend middleware accepts the credential via X-API-Key, Authorization
+// Bearer or ?api_key=, and tries to decode it as a JWT before falling back to
+// the legacy API_KEY — so a single header works for both auth modes.
 function headers(): Record<string, string> {
   const key = localStorage.getItem(KEY_APIKEY) ?? "";
   const h: Record<string, string> = { "Content-Type": "application/json" };
@@ -94,10 +98,57 @@ export async function listConversations(): Promise<Conversation[]> {
   return res.json();
 }
 
+export async function createConversation(model: string): Promise<Conversation> {
+  const res = await fetch(`${base()}/api/conversations`, {
+    method: "POST",
+    headers: headers(),
+    body: JSON.stringify({ model, title: "Nueva conversación" }),
+  });
+  if (!res.ok) throw new Error(`No se pudo crear la conversación (${res.status})`);
+  return res.json();
+}
+
+interface ApiMessage {
+  id: string;
+  role: string;
+  content: unknown;
+  created_at: number;
+}
+
+/** Flatten whatever the backend stored into plain text for the bubble list. */
+function messageText(content: unknown): string {
+  if (typeof content === "string") return content;
+  if (Array.isArray(content)) {
+    return content
+      .map((block) => {
+        if (typeof block === "string") return block;
+        if (block && typeof block === "object") {
+          const b = block as Record<string, unknown>;
+          if (b.type === "text") return String(b.text ?? "");
+          if (b.type === "image") return "🖼️ [imagen]";
+          if (b.type === "document") return "📄 [documento]";
+        }
+        return "";
+      })
+      .filter(Boolean)
+      .join("\n");
+  }
+  return content == null ? "" : String(content);
+}
+
 export async function getConversation(id: string): Promise<{ messages: Message[] }> {
   const res = await fetch(`${base()}/api/conversations/${id}`, { headers: headers() });
   if (!res.ok) throw new Error("Failed to fetch conversation");
-  return res.json();
+  const data = await res.json();
+  const messages: Message[] = (data.messages as ApiMessage[])
+    .filter((m) => m.role === "user" || m.role === "assistant")
+    .map((m) => ({
+      id: m.id,
+      role: m.role as "user" | "assistant",
+      content: messageText(m.content),
+      timestamp: (m.created_at ?? 0) * 1000,
+    }));
+  return { messages };
 }
 
 export async function deleteConversation(id: string): Promise<void> {
@@ -107,31 +158,44 @@ export async function deleteConversation(id: string): Promise<void> {
   });
 }
 
+export async function approveTool(
+  conversationId: string,
+  toolUseId: string,
+  approved: boolean,
+): Promise<void> {
+  await fetch(`${base()}/api/conversations/${conversationId}/approve`, {
+    method: "POST",
+    headers: headers(),
+    body: JSON.stringify({ tool_use_id: toolUseId, approved }),
+  });
+}
+
 // ── SSE Streaming chat ────────────────────────────────────────────────────────
 export type StreamCallback = (event: { type: string; data: Record<string, unknown> }) => void;
 
+/**
+ * Stream one turn of a conversation.
+ *
+ * The backend exposes this per conversation — POST /api/conversations/{id}/chat
+ * with { content, model, images } — and reads the history from the database, so
+ * there is no need to replay it from the client. The stream terminates with a
+ * literal `data: [DONE]` line; the `done` events that arrive before it are
+ * emitted once per agent iteration and must NOT be treated as the end.
+ */
 export function sendMessage(
-  messages: Array<{ role: string; content: string }>,
+  conversationId: string,
+  content: string,
   model: string,
-  conversationId: string | null,
   onEvent: StreamCallback,
-  onDone: (convId: string) => void,
+  onDone: () => void,
   onError: (err: string) => void,
 ): () => void {
   const controller = new AbortController();
 
-  const h = headers();
-  delete h["Content-Type"]; // fetch sets it for SSE
-
-  fetch(`${base()}/api/chat`, {
+  fetch(`${base()}/api/conversations/${conversationId}/chat`, {
     method: "POST",
-    headers: { ...headers() },
-    body: JSON.stringify({
-      messages,
-      model,
-      conversation_id: conversationId,
-      stream: true,
-    }),
+    headers: headers(),
+    body: JSON.stringify({ content, model, images: [] }),
     signal: controller.signal,
   })
     .then(async (res) => {
@@ -139,10 +203,15 @@ export function sendMessage(
         onError(`Server error ${res.status}`);
         return;
       }
-      const reader = res.body!.getReader();
+      if (!res.body) {
+        onError("El servidor no devolvió un stream");
+        return;
+      }
+
+      const reader = res.body.getReader();
       const decoder = new TextDecoder();
       let buffer = "";
-      let newConvId = conversationId ?? "";
+      let finished = false;
 
       while (true) {
         const { done, value } = await reader.read();
@@ -152,22 +221,25 @@ export function sendMessage(
         buffer = lines.pop() ?? "";
 
         for (const line of lines) {
-          if (line.startsWith("data: ")) {
-            try {
-              const payload = JSON.parse(line.slice(6));
-              if (payload.type === "conversation_id") {
-                newConvId = payload.data.id ?? newConvId;
-              }
-              onEvent(payload);
-              if (payload.type === "done") {
-                onDone(newConvId);
-              }
-            } catch {
-              // ignore malformed lines
-            }
+          if (!line.startsWith("data: ")) continue;
+          const raw = line.slice(6).trim();
+
+          if (raw === "[DONE]") {
+            finished = true;
+            onDone();
+            continue;
+          }
+
+          try {
+            const payload = JSON.parse(raw);
+            onEvent(payload);
+          } catch {
+            // ignore malformed lines
           }
         }
       }
+
+      if (!finished) onDone();
     })
     .catch((err) => {
       if (err.name !== "AbortError") onError(String(err));
