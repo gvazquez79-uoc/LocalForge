@@ -175,8 +175,8 @@ cd frontend && npm run dev
 
 | Service | URL |
 |---|---|
-| Frontend (chat) | http://localhost:5173 |
-| Log viewer | http://localhost:5173/logs |
+| Frontend (chat) | http://localhost:3000 |
+| Log viewer | http://localhost:3000/logs |
 | Backend API | http://localhost:8000 |
 | Swagger docs | http://localhost:8000/docs |
 
@@ -209,8 +209,8 @@ Used **only on first boot** to seed the database. After that, all config is mana
     "web_search": { "enabled": true, "max_results": 5 }
   },
   "agent": {
-    "max_iterations": 20,
-    "compact_threshold": 40000,  // chars — compacts old tool results above this limit
+    "max_iterations": 40,
+    "compact_threshold": 80000,  // chars — compacts old tool results above this limit
     "system_prompt": "..."
   },
   "telegram": {
@@ -258,14 +258,14 @@ Each model supports two optional overrides set in **Settings → Models → Edit
 
 ## Memory optimisation
 
-When a conversation grows large (default threshold: **40,000 characters**), LocalForge automatically truncates old tool results — the biggest contributors to context size — while keeping recent messages intact. A notice appears in the chat:
+When a conversation grows large (default threshold: **80,000 characters**), LocalForge automatically truncates old tool results — the biggest contributors to context size — while keeping recent messages intact. A notice appears in the chat:
 
 > `🗜️ Optimizando memoria… 23K liberados`
 
 The threshold is configurable in **Settings → Agent → Umbral de optimización de memoria**. Recommended values:
 - Small context models (8K tokens): `20000`
-- Standard models (32K): `40000` _(default)_
-- Large context models (128K+): `80000–100000`
+- Standard models (32K): `40000`
+- Large context models (128K+): `80000–100000` _(default: `80000`)_
 
 ---
 
@@ -380,7 +380,7 @@ PDF text extraction requires `pypdf`:
 py -3 -m pip install pypdf
 ```
 
-Attachment size limits are configurable in **Settings → Attachments** (defaults: images 5 MB, PDFs 25 MB, text 512 KB).
+Attachment size limits are configurable in **Settings → Attachments** (defaults: images 5 MB, PDFs 25 MB, text 2 MB).
 
 ---
 

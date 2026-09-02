@@ -7,10 +7,13 @@ for /f "tokens=5" %%a in ('netstat -aon ^| findstr ":8000 " ^| findstr "LISTENIN
     taskkill /PID %%a /F >nul 2>&1
 )
 
-:: Kill any vite/node process on port 5173
-for /f "tokens=5" %%a in ('netstat -aon ^| findstr ":5173 " ^| findstr "LISTENING"') do (
-    echo Killing PID %%a on port 5173
-    taskkill /PID %%a /F >nul 2>&1
+:: Kill any vite/node process on the frontend dev ports
+:: (3000 = the port set in frontend/vite.config.ts, 5173 = Vite's own default)
+for %%p in (3000 5173) do (
+    for /f "tokens=5" %%a in ('netstat -aon ^| findstr ":%%p " ^| findstr "LISTENING"') do (
+        echo Killing PID %%a on port %%p
+        taskkill /PID %%a /F >nul 2>&1
+    )
 )
 
 :: Also close any open LocalForge console windows by title
@@ -27,5 +30,5 @@ start "LocalForge Frontend" cmd /k "cd frontend && npm run dev"
 echo.
 echo LocalForge is starting:
 echo   Backend:  http://localhost:8000
-echo   Frontend: http://localhost:5173
+echo   Frontend: http://localhost:3000
 echo   API docs: http://localhost:8000/docs

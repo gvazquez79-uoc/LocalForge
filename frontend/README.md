@@ -8,7 +8,7 @@ See the root [README.md](../README.md) for full project documentation.
 
 ```bash
 npm install
-npm run dev       # http://localhost:5173
+npm run dev       # http://localhost:3000
 npm run build
 npm run preview
 ```
