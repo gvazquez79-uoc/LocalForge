@@ -5,14 +5,218 @@ working_directory injected via contextvars (set by the agent loop).
 """
 from __future__ import annotations
 
+import difflib
 import glob as glob_module
 import os
+import shutil
 from contextvars import ContextVar
 from pathlib import Path
 from typing import Any
 
 from backend.config import get_config
 from backend.tools.base import BaseTool
+
+_BOM = "﻿"
+
+# read_file pagination: a 5.000-line file dumped whole is most of a small model's
+# context window, and the agent only ever needs a region of it.
+MAX_READ_LINES = 2000
+MAX_LINE_CHARS = 2000
+
+
+def _clip_line(line: str) -> str:
+    if len(line) <= MAX_LINE_CHARS:
+        return line
+    return line[:MAX_LINE_CHARS] + f"… (+{len(line) - MAX_LINE_CHARS} caracteres)"
+
+
+# ── Ledger of files read in this conversation ────────────────────────────────
+# edit_file requires an exact old_string. A model that edits a file it never read
+# is guessing at the text, which is the single most common way an edit fails and
+# the agent falls back to rewriting the whole file with write_file.
+_files_read: ContextVar[set | None] = ContextVar("_files_read", default=None)
+
+
+def note_file_read(p: Path) -> None:
+    seen = _files_read.get()
+    if seen is not None:
+        seen.add(os.path.normcase(str(p)))
+
+
+def was_file_read(p: Path) -> bool:
+    seen = _files_read.get()
+    if seen is None:
+        return True          # ledger not active (Telegram, tests) — don't block
+    return os.path.normcase(str(p)) in seen
+
+
+def reset_file_ledger():
+    """Called by the agent loop at the start of a run. Returns the token."""
+    return _files_read.set(set())
+
+
+# ── Syntax gate ──────────────────────────────────────────────────────────────
+
+def _syntax_error(path: Path, text: str) -> str | None:
+    """Return a description if `text` is broken source, else None.
+
+    Only Python is checked with a real parser (compile() is free and exact);
+    for JSON we use json.loads. Everything else passes.
+    """
+    suffix = path.suffix.lower()
+    if suffix == ".py":
+        try:
+            compile(text, str(path), "exec")
+        except SyntaxError as e:
+            return f"SyntaxError línea {e.lineno}, columna {e.offset}: {e.msg}"
+        except ValueError as e:
+            return f"Fuente inválida: {e}"
+    elif suffix == ".json":
+        import json as _json
+        try:
+            _json.loads(text or "{}")
+        except ValueError as e:
+            return f"JSON inválido: {e}"
+    return None
+
+
+def _syntax_gate(path: Path, before: str, after: str, partial: bool = False) -> str | None:
+    """Asymmetric gate: block a write that BREAKS a file that used to parse.
+
+    Asymmetric on purpose. If the file was already broken (or is new), the agent
+    must be able to write it — that is often exactly the repair. What must never
+    happen is persisting a file that parsed before and doesn't now.
+
+    `partial` (mode="append") skips the gate entirely: building a file in chunks
+    goes through intermediate states that don't parse, and blocking those made
+    append useless for source files.
+    """
+    if partial or not before.strip():
+        return None
+    err = _syntax_error(path, after)
+    if not err:
+        return None
+    if _syntax_error(path, before) is not None:
+        return None          # ya estaba roto: dejar escribir
+    return (
+        f"Error: la escritura dejaría {path.name} sintácticamente roto y se ha "
+        f"cancelado. El fichero NO se ha modificado.\n{err}\n"
+        "Revisa el fragmento (¿indentación?, ¿paréntesis sin cerrar?, ¿contenido "
+        "truncado?) y vuelve a intentarlo."
+    )
+
+
+def _read_source(p: Path) -> tuple[str, str, bool]:
+    """Read a text file and report how it was encoded on disk.
+
+    Returns (text_normalised_to_LF, dominant_eol, had_bom).
+
+    Path.read_text() applies universal newlines, and Path.write_text() then
+    translates "\\n" back to os.linesep. On Windows that silently rewrote every
+    LF file as CRLF — a one-line edit produced a whole-file diff. Reading and
+    writing bytes ourselves keeps the file exactly as the project has it.
+    """
+    raw = p.read_bytes()
+    had_bom = raw.startswith(b"\xef\xbb\xbf")
+    text = raw.decode("utf-8-sig" if had_bom else "utf-8")
+    crlf = text.count("\r\n")
+    lf_only = text.count("\n") - crlf
+    eol = "\r\n" if crlf > lf_only else "\n"
+    return text.replace("\r\n", "\n"), eol, had_bom
+
+
+def _write_source(p: Path, text: str, eol: str, had_bom: bool) -> None:
+    """Write back with the file's original line endings and BOM, atomically."""
+    body = text.replace("\n", eol) if eol != "\n" else text
+    if had_bom and not body.startswith(_BOM):
+        body = _BOM + body
+    data = body.encode("utf-8")
+
+    # os.replace() swaps in a brand-new inode: without copying the metadata an
+    # edit to deploy.sh silently drops its 0755 bit, and a symlink is replaced by
+    # a regular file instead of following through to the target.
+    target = p.resolve() if p.is_symlink() else p
+    tmp = target.with_name(target.name + ".localforge-tmp")
+    try:
+        tmp.write_bytes(data)
+        if target.exists():
+            try:
+                shutil.copystat(target, tmp)
+            except OSError:
+                pass          # sistemas de ficheros sin permisos (FAT, algunos SMB)
+        os.replace(tmp, target)
+    except Exception:
+        # Nunca dejar el temporal tirado en el árbol del proyecto.
+        try:
+            tmp.unlink(missing_ok=True)
+        except OSError:
+            pass
+        raise
+
+
+def _unified_diff(before: str, after: str, path: Path, context: int = 2) -> str:
+    """Compact unified diff, so the model sees what it actually changed."""
+    lines = list(difflib.unified_diff(
+        before.splitlines(keepends=False),
+        after.splitlines(keepends=False),
+        fromfile=f"a/{path.name}", tofile=f"b/{path.name}",
+        n=context, lineterm="",
+    ))
+    if not lines:
+        return ""
+    if len(lines) > 60:
+        lines = lines[:60] + [f"... ({len(lines) - 60} líneas más)"]
+    return "\n".join(lines)
+
+
+def _match_failure_report(content: str, old_string: str, path: Path) -> str:
+    """Explain WHY old_string didn't match, instead of just saying it didn't.
+
+    A bare "old_string not found" is a dead end: the model has no way to tell
+    whether the text is absent, indented differently, or has trailing spaces —
+    so it usually gives up and rewrites the whole file with write_file. This
+    tries the near-misses and reports the one that would have worked.
+    """
+    hints: list[str] = []
+
+    stripped_trailing = "\n".join(l.rstrip() for l in content.split("\n"))
+    if stripped_trailing.count(old_string) > 0:
+        hints.append(
+            "el fichero tiene espacios al final de línea que tu old_string no incluye"
+        )
+
+    if old_string.strip() and old_string.strip() in content:
+        hints.append(
+            "el texto existe pero con distinta indentación o espacios alrededor; "
+            "copia la línea EXACTA tal y como la devuelve read_file"
+        )
+
+    collapsed = " ".join(old_string.split())
+    if collapsed and collapsed in " ".join(content.split()):
+        hints.append("el texto existe pero repartido en líneas distintas")
+
+    # Closest actual region of the file, so the model can see the real text.
+    first_line = next((l for l in old_string.split("\n") if l.strip()), "")
+    closest = ""
+    if first_line:
+        file_lines = content.split("\n")
+        matches = difflib.get_close_matches(first_line, file_lines, n=1, cutoff=0.6)
+        if matches:
+            idx = file_lines.index(matches[0])
+            window = file_lines[max(0, idx - 2): idx + 3]
+            numbered = "\n".join(
+                f"{max(0, idx - 2) + i + 1:>5} | {l}" for i, l in enumerate(window)
+            )
+            closest = f"\nLo más parecido que hay en el fichero:\n{numbered}"
+
+    msg = f"Error: old_string no encontrado en {path}."
+    if hints:
+        msg += " Causa probable: " + "; ".join(hints) + "."
+    else:
+        msg += " El texto no aparece en el fichero."
+    msg += closest
+    msg += "\nUsa read_file sobre este fichero y copia el fragmento literalmente."
+    return msg
 
 # Per-async-task working directory (set by loop.py when a conversation has one).
 # Using ContextVar ensures concurrent conversations don't interfere.
@@ -55,21 +259,24 @@ def _resolve_and_check(path: str) -> Path:
 class ReadFileTool(BaseTool):
     name = "read_file"
     description = (
-        "Read the contents of a file. Supports text files and PDFs. "
-        "For PDFs, extracts the text from all pages. "
-        "Use the `pages` parameter to read specific pages (e.g. '1-5' or '3')."
+        "Read the contents of a file, with line numbers. Supports text files and PDFs. "
+        "Long files are paginated: use `offset` and `limit` to read further chunks. "
+        "For PDFs, use the `pages` parameter (e.g. '1-5' or '3')."
     )
     parameters = {
         "type": "object",
         "properties": {
             "path": {"type": "string", "description": "Absolute or ~ path to the file"},
             "encoding": {"type": "string", "description": "File encoding (default: utf-8)", "default": "utf-8"},
+            "offset": {"type": "integer", "description": "First line to read, 1-based (default: 1)"},
+            "limit": {"type": "integer", "description": f"Maximum lines to return (default: {MAX_READ_LINES})"},
             "pages": {"type": "string", "description": "Page range for PDFs, e.g. '1-5' or '3'. Omit to read all pages."},
         },
         "required": ["path"],
     }
 
-    async def run(self, path: str, encoding: str = "utf-8", pages: str | None = None, **_: Any) -> str:
+    async def run(self, path: str, encoding: str = "utf-8", pages: str | None = None,
+                  offset: int | None = None, limit: int | None = None, **_: Any) -> str:
         resolved = _resolve_and_check(path)
         cfg = get_config().tools.filesystem
         max_bytes = cfg.max_file_size_mb * 1024 * 1024
@@ -86,9 +293,47 @@ class ReadFileTool(BaseTool):
             return _read_pdf(resolved, pages)
 
         try:
-            return resolved.read_text(encoding=encoding)
+            if encoding.lower().replace("-", "") in ("utf8", "utf8sig"):
+                # utf-8-sig quita el BOM si lo hay. Sin esto, la primera línea que
+                # ve el modelo empieza por ﻿ y su old_string nunca casa con
+                # lo que lee edit_file, que sí lo descarta.
+                text = resolved.read_text(encoding="utf-8-sig")
+            else:
+                text = resolved.read_text(encoding=encoding)
         except UnicodeDecodeError:
             return f"Error: cannot decode file as {encoding}. It may be a binary file."
+
+        # Record the read so edit_file can tell whether the model looked first.
+        note_file_read(resolved)
+
+        lines = text.replace("\r\n", "\n").split("\n")
+        # A trailing newline produces a phantom empty last line.
+        if lines and lines[-1] == "":
+            lines.pop()
+        total = len(lines)
+
+        start = max(1, offset or 1)
+        count = limit if (limit and limit > 0) else MAX_READ_LINES
+        chunk = lines[start - 1: start - 1 + count]
+
+        if not chunk:
+            return f"(el fichero tiene {total} líneas; la línea {start} está fuera de rango)"
+
+        # Line numbers let the model quote back an exact region for edit_file.
+        width = len(str(start + len(chunk) - 1))
+        body = "\n".join(
+            f"{start + i:>{width}} | {_clip_line(l)}" for i, l in enumerate(chunk)
+        )
+
+        end = start + len(chunk) - 1
+        if total > end:
+            body += (
+                f"\n\n[mostradas las líneas {start}-{end} de {total}. "
+                f"Continúa con read_file(path=..., offset={end + 1})]"
+            )
+        elif start > 1:
+            body += f"\n\n[líneas {start}-{end} de {total}]"
+        return body
 
 
 def _read_pdf(path: Path, pages: str | None = None) -> str:
@@ -160,14 +405,63 @@ class WriteFileTool(BaseTool):
 
     async def run(self, path: str, content: str, mode: str = "overwrite", **_: Any) -> str:
         resolved = _resolve_and_check(path)
-        resolved.parent.mkdir(parents=True, exist_ok=True)
+
+        # Creating the whole parent chain silently turns a typo in the path
+        # ("src/componets/x.ts") into a brand-new tree plus a "Success". Only
+        # create ONE missing level, and say so.
+        created_dir = False
+        if not resolved.parent.exists():
+            if not resolved.parent.parent.exists():
+                return (
+                    f"Error: el directorio {resolved.parent} no existe y su padre tampoco. "
+                    "Comprueba la ruta (¿una errata?) o crea el árbol explícitamente con "
+                    "execute_command."
+                )
+            resolved.parent.mkdir()
+            created_dir = True
+
+        existed = resolved.exists()
+        before, eol, had_bom = "", "\n", False
+        if existed:
+            try:
+                before, eol, had_bom = _read_source(resolved)
+            except UnicodeDecodeError:
+                # El fichero que hay no es UTF-8 (cp1252, binario, un .png…).
+                # En overwrite da igual: lo vamos a reemplazar entero. En append
+                # NO, porque escribiríamos sobre él perdiendo su contenido.
+                if mode == "append":
+                    return (
+                        f"Error: {resolved} existe y no es UTF-8 válido, así que no se puede "
+                        "añadir contenido sin corromperlo. Usa mode='overwrite' si de verdad "
+                        "quieres reemplazarlo."
+                    )
+                before, eol, had_bom = "", "\n", False
+
         if mode == "append":
-            with open(resolved, "a", encoding="utf-8") as f:
-                f.write(content)
+            after = before + content.replace("\r\n", "\n")
         else:
-            resolved.write_text(content, encoding="utf-8")
-        action = "appended to" if mode == "append" else "written to"
-        return f"Success: {len(content)} characters {action} {resolved}"
+            after = content.replace("\r\n", "\n")
+
+        broken = _syntax_gate(resolved, before, after, partial=(mode == "append"))
+        if broken:
+            return broken
+
+        _write_source(resolved, after, eol, had_bom)
+        note_file_read(resolved)
+
+        notes = []
+        if created_dir:
+            notes.append(f"creado el directorio {resolved.parent}")
+        if existed and mode != "append":
+            diff = _unified_diff(before, after, resolved)
+            if diff:
+                notes.append("cambios:\n" + diff)
+            elif before == after:
+                notes.append("el contenido es idéntico al que ya había")
+
+        action = "Añadido a" if mode == "append" else ("Sobrescrito" if existed else "Creado")
+        head = f"{action} {resolved} ({len(content)} caracteres)"
+        return head + ("\n" + "\n".join(notes) if notes else "")
 
 
 class ListDirectoryTool(BaseTool):
@@ -298,21 +592,51 @@ class EditFileTool(BaseTool):
         if not old_string:
             return "Error: old_string cannot be empty"
 
-        content = resolved.read_text(encoding="utf-8")
-        count = content.count(old_string)
-
-        if count == 0:
-            return f"Error: old_string not found in {resolved}"
-        if count > 1 and not replace_all:
+        if old_string == new_string:
+            return "Error: old_string y new_string son idénticos — la edición no haría nada."
+        if not was_file_read(resolved):
             return (
-                f"Error: old_string appears {count} times in {resolved}. "
-                "Add more surrounding context to make it unique, or set replace_all=true."
+                f"Error: no has leído {resolved} en esta conversación. edit_file exige el texto "
+                "EXACTO, así que hay que verlo antes de editarlo. Llama a "
+                f"read_file(path=\"{resolved}\") y vuelve a intentarlo."
             )
 
-        new_content = content.replace(old_string, new_string) if replace_all else content.replace(old_string, new_string, 1)
-        resolved.write_text(new_content, encoding="utf-8")
+        content, eol, had_bom = _read_source(resolved)
+        # The model never sees CRLF (read_file normalises too), so match on LF.
+        needle = old_string.replace("\r\n", "\n")
+        replacement = new_string.replace("\r\n", "\n")
+        count = content.count(needle)
+
+        if count == 0:
+            return _match_failure_report(content, needle, resolved)
+        if count > 1 and not replace_all:
+            # Show where they are, so the next attempt can disambiguate.
+            positions = []
+            start = 0
+            for _ in range(min(count, 5)):
+                idx = content.find(needle, start)
+                positions.append(str(content.count("\n", 0, idx) + 1))
+                start = idx + 1
+            return (
+                f"Error: old_string aparece {count} veces en {resolved} "
+                f"(líneas {', '.join(positions)}). Añade contexto alrededor para hacerlo "
+                "único, o usa replace_all=true si quieres cambiarlas todas."
+            )
+
+        new_content = (content.replace(needle, replacement) if replace_all
+                       else content.replace(needle, replacement, 1))
+
+        broken = _syntax_gate(resolved, content, new_content)
+        if broken:
+            return broken
+
+        _write_source(resolved, new_content, eol, had_bom)
+        note_file_read(resolved)   # el contenido en disco es el que acabamos de escribir
+
         replaced = count if replace_all else 1
-        return f"Success: replaced {replaced} occurrence(s) in {resolved}"
+        diff = _unified_diff(content, new_content, resolved)
+        header = f"Editado {resolved} ({replaced} reemplazo(s))"
+        return f"{header}\n{diff}" if diff else header
 
 
 class DeleteFileTool(BaseTool):
