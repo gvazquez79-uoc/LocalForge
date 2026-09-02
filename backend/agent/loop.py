@@ -27,7 +27,14 @@ def _get_memory_path() -> Path:
 
 
 def _messages_char_count(messages: list[dict]) -> int:
-    """Estimate total character count of all messages."""
+    """Estimate total character count of all messages.
+
+    Counts the tool-call payloads too. It used to look only at `text`/`content`
+    inside content blocks, which meant an Anthropic `tool_use` block carrying a
+    200 KB `write_file` body scored ZERO, and so did the `tool_calls` list on the
+    OpenAI path — the two biggest things in a coding agent's history. The
+    compaction threshold was effectively blind to everything the agent wrote.
+    """
     total = 0
     for m in messages:
         content = m.get("content") or ""
@@ -35,8 +42,30 @@ def _messages_char_count(messages: list[dict]) -> int:
             total += len(content)
         elif isinstance(content, list):
             for block in content:
-                if isinstance(block, dict):
+                if not isinstance(block, dict):
+                    total += len(str(block))
+                    continue
+                btype = block.get("type")
+                if btype == "tool_use":
+                    # The tool arguments ARE the payload (file contents, diffs).
+                    total += len(block.get("name") or "")
+                    try:
+                        total += len(json.dumps(block.get("input") or {}, ensure_ascii=False))
+                    except (TypeError, ValueError):
+                        total += len(str(block.get("input") or ""))
+                elif btype in ("image", "document"):
+                    # base64 payload: charge it, roughly, so media triggers
+                    # compaction instead of hiding inside a nested dict.
+                    src = block.get("source") or {}
+                    total += len(src.get("data") or "")
+                else:
                     total += len(str(block.get("text", "") or block.get("content", "")))
+        # OpenAI-shaped assistant turns keep the call outside `content`.
+        for tc in m.get("tool_calls") or []:
+            if not isinstance(tc, dict):
+                continue
+            fn = tc.get("function") or {}
+            total += len(fn.get("name") or "") + len(fn.get("arguments") or "")
     return total
 
 
@@ -242,14 +271,54 @@ def _extract_json_object(text: str, start: int) -> str | None:
     return None
 
 
+def _trim_param_value(raw: str) -> str:
+    """Strip only the line breaks the XML tags introduce, never indentation.
+
+    `<parameter=old_string>\\n    if x:\\n        y()\\n</parameter>` has to come
+    back as "    if x:\\n        y()" with its leading spaces intact. A plain
+    .strip() here removed them, so every edit_file that a local model routed
+    through the inline format arrived with the indentation destroyed and could
+    never match the file.
+    """
+    if raw.startswith("\r\n"):
+        raw = raw[2:]
+    elif raw.startswith("\n"):
+        raw = raw[1:]
+    if raw.endswith("\r\n"):
+        raw = raw[:-2]
+    elif raw.endswith("\n"):
+        raw = raw[:-1]
+    # Una etiqueta indentada — que es como la escriben los modelos locales —
+    # dejaba la sangría pegada al valor:
+    #   <parameter=path>\n    /home/u/app.py\n  </parameter>  →  "    /home/u/app.py\n  "
+    # Para un valor de UNA línea eso es siempre basura (una ruta, un comando, un
+    # número). Para uno multilínea la sangría es el contenido y no se toca.
+    if "\n" not in raw.strip():
+        return raw.strip()
+    # Quitar el resto de sangría de la etiqueta de cierre, que no es del valor.
+    if raw.endswith("\n") or raw.rstrip(" \t") != raw:
+        tail = raw[len(raw.rstrip(" \t")):]
+        if tail and "\n" not in tail:
+            raw = raw.rstrip(" \t")
+    return raw
+
+
 def _coerce_param_value(raw: str):
     """XML <parameter> values arrive as plain strings, but many tools expect
     int/float/bool/list/dict (e.g. todo_update.task_number, git_log.n). Try to
     parse the value as JSON; fall back to the raw string when it isn't valid JSON
-    (so paths, commands and free text are preserved untouched)."""
+    (so paths, commands and free text are preserved untouched).
+
+    Type detection runs on the whitespace-stripped form, but a value that stays
+    a string is returned with its own whitespace untouched — code needs its
+    indentation.
+    """
     if raw == "":
         return raw
-    low = raw.lower()
+    probe = raw.strip()
+    if probe == "":
+        return raw
+    low = probe.lower()
     if low == "true":
         return True
     if low == "false":
@@ -258,9 +327,9 @@ def _coerce_param_value(raw: str):
         return None
     # Only attempt JSON parsing for values that look numeric or structured —
     # avoids turning a bareword path/identifier into something unexpected.
-    if raw[0] in "-0123456789[{\"" :
+    if probe[0] in "-0123456789[{\"":
         try:
-            return json.loads(raw)
+            return json.loads(probe)
         except (json.JSONDecodeError, ValueError):
             pass
     return raw
@@ -268,9 +337,22 @@ def _coerce_param_value(raw: str):
 
 def _parse_inline_tool_calls(text: str) -> list[dict]:
     """Extract tool calls embedded as text and return them in the same dict
-    format as the adapter's 'tool_call' events: {id, name, input}."""
+    format as the adapter's 'tool_call' events: {id, name, input}.
+
+    Duplicates are keyed on (name, arguments), not on the name alone. Keying on
+    the name meant a turn that emitted three different `edit_file` calls only
+    ever executed the first one — which is exactly what a multi-file refactor
+    looks like on the models that use this format. Identical repeated calls are
+    still collapsed.
+    """
     results: list[dict] = []
     seen: set[str] = set()
+
+    def _key(name: str, args) -> str:
+        try:
+            return name + "\x00" + json.dumps(args, sort_keys=True, ensure_ascii=False)
+        except (TypeError, ValueError):
+            return name + "\x00" + repr(args)
 
     # ── Format A: JSON-based prefixes ────────────────────────────────────────
     for match in _INLINE_TOOL_PREFIXES.finditer(text):
@@ -283,21 +365,22 @@ def _parse_inline_tool_calls(text: str) -> list[dict]:
             continue
         name = obj.get("name") or obj.get("function")
         args = obj.get("arguments") or obj.get("parameters") or obj.get("input") or {}
-        if not name or name in seen:
+        if not name:
             continue
         if isinstance(args, str):
             try:
                 args = json.loads(args)
             except json.JSONDecodeError:
                 args = {}
-        seen.add(name)
+        k = _key(name, args)
+        if k in seen:
+            continue
+        seen.add(k)
         results.append({"id": f"inline_{uuid.uuid4().hex[:8]}", "name": name, "input": args})
 
     # ── Format B: <function=NAME> <parameter=P>V</parameter> ─────────────────
     for fn_match in _FUNCTION_TAG.finditer(text):
         name = fn_match.group(1)
-        if name in seen:
-            continue
         # Collect everything after <function=NAME> until </function> or end
         after = text[fn_match.end():]
         end_tag = re.search(r'</function>', after, re.IGNORECASE)
@@ -306,12 +389,14 @@ def _parse_inline_tool_calls(text: str) -> list[dict]:
         args: dict = {}
         for p_match in _PARAM_TAG.finditer(block):
             param_name = p_match.group(1)
-            param_value = p_match.group(2).strip()
-            args[param_name] = _coerce_param_value(param_value)
+            args[param_name] = _coerce_param_value(_trim_param_value(p_match.group(2)))
         if not args and not end_tag:
             # Incomplete stream — skip to avoid phantom calls
             continue
-        seen.add(name)
+        k = _key(name, args)
+        if k in seen:
+            continue
+        seen.add(k)
         results.append({"id": f"inline_{uuid.uuid4().hex[:8]}", "name": name, "input": args})
 
     return results
@@ -761,6 +846,8 @@ def _permission_type_for_tool(tool_name: str) -> str | None:
         return "write_file"
     if tool_name in ("delete_file", "delete_directory"):
         return "delete_file"
+    if tool_name == "git_push":
+        return "git_push"
     return None
 
 
@@ -774,6 +861,11 @@ def _requires_confirmation(tool_name: str, tool_input: dict) -> bool:
         return "write_file" in cfg.tools.filesystem.require_confirmation_for
     if tool_name in ("delete_file", "delete_directory"):
         return "delete_file" in cfg.tools.filesystem.require_confirmation_for
+    if tool_name == "git_push":
+        # Publica fuera del repositorio: es la única acción del agente que el
+        # usuario no puede deshacer en su propia máquina. Siempre confirma,
+        # salvo que ya se haya concedido "siempre en este proyecto".
+        return True
 
     return False
 
@@ -827,6 +919,11 @@ async def run_agent(
     else:
         _wd_token = None
 
+    # Track which files this run has read, so edit_file can refuse to edit a file
+    # the model never looked at (it would be guessing at old_string).
+    from backend.tools.filesystem import reset_file_ledger, _files_read
+    _ledger_token = reset_file_ledger()
+
     is_anthropic = "anthropic" in type(adapter).__name__.lower()
     schema_tools = _tools_to_anthropic(tools) if is_anthropic else _tools_to_openai(tools)
 
@@ -867,7 +964,14 @@ async def run_agent(
             pass  # If listing fails, continue without context
     max_iter = cfg.agent.max_iterations
     hallucination_corrections = 0
+    verify_attempts = 0
+    last_verify_fingerprint = ""
+    verify_failed_pending = False
+    # Rutas escritas en este run, para decidir QUÉ verificar.
+    _files_written: set = set()
     total_input_tokens = 0
+    total_cache_read = 0
+    total_cache_write = 0
     total_output_tokens = 0
 
     # Track write operations across iterations to detect mid-task stops
@@ -908,6 +1012,31 @@ async def run_agent(
                 yield StreamEvent(type="compacting", data={"saved_chars": saved, "phase": "fallback"})
 
 
+        # ── Spend cap ──────────────────────────────────────────────────────
+        # A run that goes in circles can burn a lot of money without anyone
+        # noticing until the invoice. Stop and say so, instead of silently
+        # continuing to max_iterations.
+        _budget = cfg.agent.max_run_tokens
+        _spent = (total_input_tokens + total_output_tokens
+                  + total_cache_read + total_cache_write)
+        if _budget and _spent >= _budget:
+            _loop_log.warning("[loop] tope de gasto alcanzado (%s tokens)", _budget)
+            yield StreamEvent(type="text_delta", data={"text": (
+                f"\n\n⏸️ He alcanzado el tope de gasto de este turno "
+                f"({_budget:,} tokens) y paro aquí. Dime si quieres que continúe, "
+                "o sube el límite en Ajustes → Agente."
+            )})
+            yield StreamEvent(type="usage", data={
+                "input_tokens": total_input_tokens,
+                "output_tokens": total_output_tokens,
+                "cache_read_tokens": total_cache_read,
+                "cache_write_tokens": total_cache_write,
+            })
+            if _wd_token is not None:
+                _conv_working_dir.reset(_wd_token)
+            _files_read.reset(_ledger_token)
+            return
+
         _loop_log.info(f"[loop] iter={iteration+1} msgs={len(working_messages)}")
 
         tool_calls: list[dict] = []
@@ -934,10 +1063,24 @@ async def run_agent(
             elif event.type == "usage":
                 total_input_tokens += event.data.get("input_tokens", 0)
                 total_output_tokens += event.data.get("output_tokens", 0)
+                total_cache_read += event.data.get("cache_read_tokens", 0)
+                total_cache_write += event.data.get("cache_write_tokens", 0)
                 # Don't forward per-iteration events; emit one total at the end
 
             elif event.type == "error":
                 yield event
+                # Un run que muere por error de red o de la API también ha
+                # costado dinero: sin esto, StatsBar no lo veía nunca.
+                if total_input_tokens or total_output_tokens:
+                    yield StreamEvent(type="usage", data={
+                        "input_tokens": total_input_tokens,
+                        "output_tokens": total_output_tokens,
+                        "cache_read_tokens": total_cache_read,
+                        "cache_write_tokens": total_cache_write,
+                    })
+                if _wd_token is not None:
+                    _conv_working_dir.reset(_wd_token)
+                _files_read.reset(_ledger_token)
                 return
 
         # Append assistant turn to history.
@@ -1053,14 +1196,79 @@ async def run_agent(
                     })
                     continue
 
+                # ── Verification gate ──────────────────────────────────────
+                # The model considers itself done. Before agreeing, run whatever
+                # the project actually has (tests, typecheck, build) over what it
+                # touched. This is the difference between "generated plausible
+                # code" and "delivered code that runs".
+                _agotados = verify_attempts >= cfg.agent.max_verify_attempts
+                if (
+                    cfg.agent.verify_after_write
+                    and working_directory
+                    and _files_written
+                    and not _agotados
+                ):
+                    verify_attempts += 1
+                    yield StreamEvent(type="verifying", data={"attempt": verify_attempts})
+                    from backend.agent.verify import run_verification
+                    try:
+                        ok, summary, fingerprint = await run_verification(
+                            working_directory, _files_written,
+                            timeout=cfg.agent.verify_timeout_seconds,
+                        )
+                    except Exception as exc:
+                        _loop_log.warning("[verify] falló la verificación: %s", exc)
+                        ok, summary, fingerprint = True, "", ""
+
+                    verify_failed_pending = not ok
+                    if not ok:
+                        if fingerprint == last_verify_fingerprint:
+                            # Same failure twice: the model is going in circles.
+                            # Stop burning iterations and hand it back honestly.
+                            yield StreamEvent(type="text_delta", data={"text": (
+                                "\n\n⚠️ La verificación sigue fallando igual que en el intento "
+                                "anterior; lo dejo aquí para no dar vueltas. El error es:\n\n"
+                                f"```\n{summary[:1500]}\n```"
+                            )})
+                        else:
+                            last_verify_fingerprint = fingerprint
+                            working_messages.append({"role": "user", "content": (
+                                "[SISTEMA] Has dado la tarea por terminada, pero la verificación "
+                                "del proyecto falla. Corrige el problema y no respondas hasta que "
+                                "pase. Salida de la verificación:\n\n" + summary
+                            )})
+                            continue
+                    elif summary:
+                        yield StreamEvent(type="text_delta",
+                                          data={"text": f"\n\n✅ {summary}"})
+
+                elif _agotados and verify_failed_pending:
+                    # Se agotaron los intentos y cada fallo fue distinto, así que
+                    # la huella nunca coincidió. Cerrar en silencio daría por
+                    # buena una tarea que no pasa sus propias comprobaciones.
+                    yield StreamEvent(type="text_delta", data={"text": (
+                        f"\n\n⚠️ He agotado los {cfg.agent.max_verify_attempts} intentos de "
+                        "verificación y el proyecto sigue sin pasar sus comprobaciones. "
+                        "Revísalo antes de dar el cambio por bueno."
+                    )})
+                    verify_failed_pending = False
+
                 if total_input_tokens or total_output_tokens:
                     yield StreamEvent(type="usage", data={
                         "input_tokens": total_input_tokens,
                         "output_tokens": total_output_tokens,
+                        "cache_read_tokens": total_cache_read,
+                        "cache_write_tokens": total_cache_write,
                     })
                 if _wd_token is not None:
                     _conv_working_dir.reset(_wd_token)
+                _files_read.reset(_ledger_token)
                 return
+
+        # Number of execute_command calls in THIS turn that came back non-zero.
+        # The correction message is injected once after the loop, never between
+        # two tool_results (see below).
+        _failed_commands = 0
 
         # Execute each tool call
         for tc in tool_calls:
@@ -1108,20 +1316,50 @@ async def run_agent(
                     continue
 
             # Track write operations so we can detect mid-task stops
-            if tool_name in ("write_file", "edit_file", "create_directory"):
+            _pending_write_path = None
+            if tool_name in ("write_file", "edit_file"):
                 write_calls_this_run += 1
                 write_calls_last_iter += 1
+                _pending_write_path = tool_input.get("path")
 
             # Execute the tool
             if tool is None:
-                result = f"Error: unknown tool '{tool_name}'"
+                known = ", ".join(sorted(tool_map.keys()))
+                result = (
+                    f"Error: la herramienta '{tool_name}' no existe. "
+                    f"Herramientas disponibles: {known}"
+                )
             else:
-                try:
-                    result = await tool.run(**tool_input)
-                except PermissionError as e:
-                    result = f"Permission denied: {e}"
-                except Exception as e:
-                    result = f"Tool error: {e}"
+                # Validate arguments against the tool's own schema first. A
+                # hallucinated parameter would otherwise reach tool.run() and
+                # come back as "got an unexpected keyword argument", which the
+                # model reads as a broken tool instead of a fixable call.
+                from backend.tools.base import validate_tool_input
+                _invalid = validate_tool_input(tool, tool_input)
+                if _invalid:
+                    result = _invalid
+                    _loop_log.info(f"[loop] invalid args for {tool_name}: {_invalid[:160]}")
+                else:
+                    try:
+                        result = await tool.run(**tool_input)
+                    except PermissionError as e:
+                        result = f"Permission denied: {e}"
+                    except TypeError as e:
+                        # Signature mismatch the schema didn't describe.
+                        result = f"Error: llamada inválida a `{tool_name}` — {e}"
+                    except Exception as e:
+                        result = f"Tool error: {e}"
+
+            # Solo cuenta como escritura si de verdad se escribió: el ledger de
+            # read-before-edit, la puerta de sintaxis y los permisos devuelven un
+            # texto de error, y disparar la verificación por ellos era gratis y
+            # confuso.
+            if (
+                _pending_write_path
+                and isinstance(result, str)
+                and not result.startswith(("Error:", "Permission denied:", "Tool error:"))
+            ):
+                _files_written.add(_pending_write_path)
 
             yield StreamEvent(
                 type="tool_result",
@@ -1143,7 +1381,8 @@ async def run_agent(
                     # Internal tool error (timeout, cwd not found, blocked command)
                     _command_failed = True
             if _command_failed:
-                _loop_log.info(f"[loop] Command failed, injecting auto-retry correction")
+                _failed_commands += 1
+                _loop_log.info(f"[loop] Command failed, auto-retry correction queued")
 
             if is_anthropic:
                 working_messages.append({
@@ -1158,17 +1397,35 @@ async def run_agent(
                     "content": result,
                 })
 
-            # Inject auto-retry correction after saving failed command result
-            if _command_failed:
-                working_messages.append({
-                    "role": "user",
-                    "content": (
-                        "[SISTEMA] El comando ha fallado. Analiza el error anterior y corrígelo "
-                        "inmediatamente — ajusta el comando, instala dependencias faltantes o "
-                        "arregla el código según corresponda. No preguntes, actúa directamente."
-                    ),
-                })
+        # ── Auto-retry correction — AFTER the whole tool loop ──────────────
+        # This used to live inside `for tc in tool_calls`, which meant that when
+        # the first of several tool calls failed, a role="user" message landed
+        # BETWEEN two tool_results. Anthropic rejects that outright (every
+        # tool_use needs its tool_result in the same user turn) and the other
+        # providers lose the pairing. Injecting once, after every result is in
+        # place, keeps the turn well-formed no matter how many tools ran.
+        if _failed_commands:
+            _plural = "Los comandos han fallado" if _failed_commands > 1 else "El comando ha fallado"
+            working_messages.append({
+                "role": "user",
+                "content": (
+                    f"[SISTEMA] {_plural}. Analiza el error anterior y corrígelo "
+                    "inmediatamente — ajusta el comando, instala dependencias faltantes o "
+                    "arregla el código según corresponda. No preguntes, actúa directamente."
+                ),
+            })
 
     if _wd_token is not None:
         _conv_working_dir.reset(_wd_token)
-    yield StreamEvent(type="error", data={"message": f"Max iterations ({max_iter}) reached"})
+    _files_read.reset(_ledger_token)
+    if total_input_tokens or total_output_tokens:
+        yield StreamEvent(type="usage", data={
+            "input_tokens": total_input_tokens,
+            "output_tokens": total_output_tokens,
+            "cache_read_tokens": total_cache_read,
+            "cache_write_tokens": total_cache_write,
+        })
+    yield StreamEvent(type="error", data={"message": (
+        f"Se han agotado las {max_iter} iteraciones sin terminar la tarea. "
+        "Revisa el estado y pídeme que continúe, o sube max_iterations en Ajustes."
+    )})
