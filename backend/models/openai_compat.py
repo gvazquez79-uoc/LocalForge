@@ -50,6 +50,11 @@ def _convert_content_for_openai(content: str | list) -> str | list:
       image    → {"type": "image_url", "image_url": {"url": "data:mime;base64,..."}}
       document → extracted text block
     """
+    if content is None:
+        # An assistant turn that only made tool calls has no text. Returning
+        # str(None) here sent the literal word "None" to the model as if the
+        # assistant had said it.
+        return ""
     if isinstance(content, str):
         return content
     if not isinstance(content, list):
@@ -123,8 +128,18 @@ class OpenAICompatAdapter(BaseModelAdapter):
                     "content": str(msg["content"]),
                 })
             else:
-                converted = _convert_content_for_openai(msg["content"])
-                openai_messages.append({"role": msg["role"], "content": converted})
+                converted = _convert_content_for_openai(msg.get("content"))
+                rebuilt: dict = {"role": msg["role"], "content": converted}
+                # Carry the assistant's tool_calls across. Dropping them here
+                # left the following role="tool" messages referring to a
+                # tool_call_id that no longer existed in the request, which the
+                # API rejects with a 400 on the very next iteration.
+                if msg.get("tool_calls"):
+                    rebuilt["tool_calls"] = msg["tool_calls"]
+                    # OpenAI expects null, not "", when a turn is tool-calls-only.
+                    if not converted:
+                        rebuilt["content"] = None
+                openai_messages.append(rebuilt)
 
         kwargs: dict = {
             "model":       self.model_name,
