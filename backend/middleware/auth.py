@@ -14,6 +14,7 @@ Public endpoints (no auth required):
 """
 from __future__ import annotations
 
+import logging
 import os
 
 from fastapi import Request
@@ -104,4 +105,10 @@ async def _is_open_mode_async() -> bool:
         count = await count_users()
         return count == 0
     except Exception:
-        return True
+        # Fail closed: if we cannot tell whether users exist, assume they do.
+        # Returning True here would hand out open access whenever the DB blips.
+        logging.warning(
+            "No se pudo comprobar si hay usuarios (¿BD caída?) — denegando acceso sin credencial.",
+            exc_info=True,
+        )
+        return False

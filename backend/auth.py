@@ -10,6 +10,7 @@ They are short-lived (5 minutes) and can ONLY be exchanged at /auth/totp/verify.
 """
 from __future__ import annotations
 
+import hashlib
 import os
 import secrets
 from datetime import datetime, timedelta
@@ -49,10 +50,25 @@ def create_totp_challenge_token(user_id: str, remember: bool = False) -> str:
     )
 
 
-def create_password_reset_token(user_id: str) -> str:
+def password_hash_fingerprint(password_hash: str) -> str:
+    """Short digest of the stored bcrypt hash, embedded in reset tokens.
+
+    Binding the token to the current password makes it single-use: as soon as
+    the password changes the fingerprint no longer matches, so the link (and
+    any other outstanding link for that user) stops working.
+    """
+    return hashlib.sha256((password_hash or "").encode()).hexdigest()[:16]
+
+
+def create_password_reset_token(user_id: str, password_hash: str = "") -> str:
     expire = datetime.utcnow() + timedelta(minutes=PASSWORD_RESET_EXPIRE_MINUTES)
     return jwt.encode(
-        {"sub": user_id, "exp": expire, "type": "password_reset"},
+        {
+            "sub": user_id,
+            "exp": expire,
+            "type": "password_reset",
+            "pwh": password_hash_fingerprint(password_hash),
+        },
         SECRET_KEY,
         algorithm=ALGORITHM,
     )
@@ -81,11 +97,12 @@ def decode_totp_challenge_token(token: str) -> dict | None:
         return None
 
 
-def decode_password_reset_token(token: str) -> str | None:
+def decode_password_reset_token(token: str) -> dict | None:
+    """Return {user_id, pwh} from a password-reset token, or None if invalid."""
     try:
         payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
         if payload.get("type") != "password_reset":
             return None
-        return payload.get("sub")
+        return {"user_id": payload.get("sub"), "pwh": payload.get("pwh", "")}
     except JWTError:
         return None

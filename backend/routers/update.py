@@ -1,5 +1,10 @@
 """
 Auto-update router — checks GitHub for new commits and applies updates.
+
+`/update/check` is read-only and open to any authenticated caller (the update
+banner polls it). `/update/apply` runs `git pull` and restarts the backend, so
+it is restricted to admins — see require_admin_or_system for how the legacy
+API_KEY and open dev mode are handled.
 """
 from __future__ import annotations
 
@@ -7,7 +12,9 @@ import asyncio
 import subprocess
 from pathlib import Path
 
-from fastapi import APIRouter
+from fastapi import APIRouter, Depends
+
+from backend.routers.auth import require_admin_or_system
 
 router = APIRouter()
 
@@ -83,7 +90,7 @@ async def check_update():
 
 
 @router.post("/update/apply")
-async def apply_update():
+async def apply_update(_admin: dict | None = Depends(require_admin_or_system)):
     """
     Pull latest changes from origin/<current-branch> and restart the backend.
     """

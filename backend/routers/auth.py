@@ -22,7 +22,7 @@ import io
 
 import pyotp
 import qrcode
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from pydantic import BaseModel
 
@@ -33,6 +33,7 @@ from backend.auth import (
     decode_token,
     decode_password_reset_token,
     decode_totp_challenge_token,
+    password_hash_fingerprint,
 )
 from backend.config import get_smtp_config
 from backend.db.users_store import (
@@ -82,6 +83,32 @@ async def get_current_user(
 
 
 async def require_admin(user: dict = Depends(get_current_user)) -> dict:
+    if not user.get("is_admin"):
+        raise HTTPException(403, "Se requieren permisos de administrador")
+    return user
+
+
+_UNSET = object()
+
+
+async def require_admin_or_system(request: Request) -> dict | None:
+    """Admin-only, but transparent to the non-JWT access modes.
+
+    The auth middleware has already vetted the request; it leaves a marker on
+    `request.state`:
+      - attribute missing → open/dev mode (no API_KEY and no users configured)
+      - value None        → authenticated with the legacy API_KEY (bot, scripts)
+      - value str         → authenticated as that user via JWT
+
+    Only the JWT case is checked for the admin flag, so tightening this endpoint
+    does not break deployments driven by API_KEY.
+    """
+    state_user = getattr(request.state, "user_id", _UNSET)
+    if state_user is _UNSET or state_user is None:
+        return None
+    user = await get_user_by_id(state_user)
+    if not user:
+        raise HTTPException(401, "Usuario no encontrado")
     if not user.get("is_admin"):
         raise HTTPException(403, "Se requieren permisos de administrador")
     return user
@@ -178,7 +205,7 @@ async def request_password_reset(body: PasswordResetRequestRequest):
 
     user = await get_user_by_email(body.email)
     if user:
-        token = create_password_reset_token(user["id"])
+        token = create_password_reset_token(user["id"], user["password_hash"])
         base = body.reset_url_base.strip().rstrip("/") or "http://localhost:5173"
         separator = "&" if "?" in base else "?"
         reset_url = f"{base}{separator}reset_token={token}"
@@ -195,13 +222,20 @@ async def confirm_password_reset(body: PasswordResetConfirmRequest):
     if len(body.password) < 8:
         raise HTTPException(400, "La nueva contraseña debe tener al menos 8 caracteres")
 
-    user_id = decode_password_reset_token(body.token)
-    if not user_id:
+    data = decode_password_reset_token(body.token)
+    if not data or not data.get("user_id"):
         raise HTTPException(400, "El enlace de restablecimiento es inválido o ha expirado")
 
+    user_id = data["user_id"]
     user = await get_user_by_id(user_id)
     if not user:
         raise HTTPException(400, "Usuario no encontrado")
+
+    # The token carries a fingerprint of the password it was issued against.
+    # Once the password changes the fingerprint stops matching, which makes the
+    # link single-use and invalidates any other outstanding link for this user.
+    if data.get("pwh") != password_hash_fingerprint(user["password_hash"]):
+        raise HTTPException(400, "El enlace de restablecimiento ya se ha utilizado o ha caducado")
 
     await update_password(user_id, body.password)
     return {"ok": True, "message": "Contraseña actualizada correctamente"}

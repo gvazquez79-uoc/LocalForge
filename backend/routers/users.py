@@ -14,17 +14,13 @@ import string
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 
-from backend.routers.auth import require_admin, get_current_user
+from backend.routers.auth import require_admin, get_current_user, _safe
 from backend.db.users_store import (
     list_users, create_user, update_user, delete_user,
     get_user_by_email, get_user_by_id, count_users,
 )
 
 router = APIRouter(prefix="/users", tags=["users"])
-
-
-def _safe(user: dict) -> dict:
-    return {k: v for k, v in user.items() if k != "password_hash"}
 
 
 def generate_strong_password(length: int = 16) -> str:
